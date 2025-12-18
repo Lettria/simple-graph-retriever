@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simple-graph-retriever"
+version = "0.1.0"
+authors = [
+  { name="Victor de La Salmonière", email="victor@lettria.com" },
+]
+description = "A simple graph-based retriever using Neo4j and Qdrant"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "neo4j",
+    "qdrant-client",
+    "requests",
+    "tqdm",
+    "igraph",
+    "leidenalg",
+    "pydantic",
+    "pydantic-settings",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["simple_graph_retriever"]

@@ -1,0 +1,36 @@
+import logging
+import os
+import sys
+from typing import Optional
+from pydantic import ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logging.basicConfig(level=os.getenv("LOGLEVEL", "WARNING"))
+logger = logging.getLogger(__name__)
+
+
+class Settings(BaseSettings):
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "password"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: Optional[str] = None
+    qdrant_chunks_collection: str = "chunks"
+    qdrant_communities_collection: str = "communities"
+    embedder_url: str = "http://localhost:8080"
+    vector_size: int = 384
+    loglevel: str = "WARNING"
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+
+try:
+    settings = Settings()
+except ValidationError as e:
+    missing_fields = [
+        error["loc"][0] for error in e.errors() if error["type"] == "missing"
+    ]
+    logger.error(
+        f"Missing configuration fields: {', '.join(str(field) for field in missing_fields)}"
+    )
+    sys.exit(1)
