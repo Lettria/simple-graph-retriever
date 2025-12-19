@@ -216,10 +216,13 @@ class GraphIndexer:
         // This query will now run once and create all necessary chunks
         WITH n 
 
-        // 1. Gather properties
+        // 1. Gather properties and textualize them
         WITH n,
              apoc.text.join(labels(n), ", ") as lbls,
-             apoc.convert.toJson(properties(n)) as props
+             apoc.text.join(
+                [key IN keys(properties(n)) WHERE NOT key IN ['uuid', 'community_id'] | key + ": " + toString(properties(n)[key])], 
+                "\\n"
+             ) as props_text
 
         // 2. Gather 1-hop context (Relationships + Neighbor Labels)
         CALL {
@@ -232,9 +235,9 @@ class GraphIndexer:
         }
 
         // 3. Format Text Blob
-        WITH n, lbls, props,
-             "Node: " + lbls + "\nProps: " + props + "\nContext:\n" +
-             apoc.text.join(context_list, "\n") as chunk_text
+        WITH n, lbls, props_text, context_list,
+             "Node: " + lbls + "\\nProps:\\n" + props_text + "\\nContext:\\n" +
+             apoc.text.join(context_list, "\\n") as chunk_text
 
         // 4. Create Chunk Node
         CREATE (c:GraphChunk {
