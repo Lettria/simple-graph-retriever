@@ -4,3 +4,5 @@ dist/
 *.ttl
 *.pdf
 examples/save_neo4j
+docker-compose.yaml
+*.json

@@ -63,51 +63,35 @@ class GraphIndexer:
 
     def close(self):
         self.driver.close()
+        self.qdrant.close()
 
-    def clear_qdrant_collections(self):
-        logger.info("🗑️ Clearing Qdrant collections...")
+    def _clear_graph_chunks(self):
+        """
+        Wipes all graph chunk data from both Neo4j and Qdrant.
+        """
+        logger.info("   Wiping all graph chunk data...")
+
+        # Wipe old chunk data from Qdrant
+        logger.info(f"   Wiping Qdrant collection: '{self.chunks_collection}'...")
         self.qdrant.recreate_collection(
             collection_name=self.chunks_collection,
             vectors_config=VectorParams(
                 size=self.vector_size, distance=Distance.COSINE
             ),
         )
-        self.qdrant.recreate_collection(
-            collection_name=self.communities_collection,
-            vectors_config=VectorParams(
-                size=self.vector_size, distance=Distance.COSINE
-            ),
-        )
-        logger.info("✅ Qdrant collections cleared and recreated.")
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """
-        Batch embedding wrapper.
-        Adjust payload/response handling based on your specific API.
-        """
-        # Example assumes an OpenAI-compatible interface or similar list-in/list-out
-        embeddings = []
-        for text in texts:
-            try:
-                resp = requests.post(
-                    self.embedder_url,
-                    json={"inputs": [text]},  # Sending as a list of one string
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                # Assuming response is a list of embeddings, even for single input
-                # e.g., [[0.1, 0.2, ...]]
-                embeddings.extend(
-                    resp.json()
-                )  # Use extend because response is list of lists
-            except Exception as e:
-                logger.error(f"Embedding failed for text '{text[:50]}...': {e}")
-                embeddings.append([])  # Append empty list for failed embeddings
-        return embeddings
+        # Wipe old chunk data from Neo4j
+        with self.driver.session() as session:
+            logger.info("   Wiping graph chunk data from Neo4j...")
+            session.run("MATCH (c:GraphChunk) DETACH DELETE c")
+            logger.info("   Graph chunk data wiped.")
 
-    def run_community_detection(self):
-        logger.info("1️⃣  Refreshing Community Structure...")
-        
+    def _clear_communities(self):
+        """
+        Wipes all community-related data from both Neo4j and Qdrant.
+        """
+        logger.info("   Wiping all community data...")
+
         # Wipe old community data from Qdrant
         logger.info(f"   Wiping Qdrant collection: '{self.communities_collection}'...")
         self.qdrant.recreate_collection(
@@ -117,16 +101,27 @@ class GraphIndexer:
             ),
         )
 
+        # Wipe old community data from Neo4j
         with self.driver.session() as session:
-            # Wipe old community data from Neo4j
             logger.info("   Wiping community data from Neo4j...")
             session.run("MATCH (c:Community) DETACH DELETE c")
-            session.run("MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id")
+            session.run(
+                "MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id"
+            )
             logger.info("   Community data wiped.")
 
+    def run_community_detection(self):
+        logger.info("1️⃣  Refreshing Community Structure...")
+        self._clear_communities()
+
+        with self.driver.session() as session:
             # Fetch all nodes and relationships from Neo4j (excluding chunks and communities)
-            logger.info("   Fetching graph data from Neo4j (excluding chunks and communities)...")
-            nodes_data = session.run("MATCH (n) WHERE NOT n:GraphChunk AND NOT n:Community RETURN elementId(n) as id").data()
+            logger.info(
+                "   Fetching graph data from Neo4j (excluding chunks and communities)..."
+            )
+            nodes_data = session.run(
+                "MATCH (n) WHERE NOT n:GraphChunk AND NOT n:Community RETURN elementId(n) as id"
+            ).data()
             rels_data = session.run(
                 "MATCH (a)-[r]->(b) WHERE NOT a:GraphChunk AND NOT a:Community AND NOT b:GraphChunk AND NOT b:Community RETURN elementId(r) as id, elementId(a) as source, elementId(b) as target"
             ).data()
@@ -184,6 +179,31 @@ class GraphIndexer:
             """
             )
             logger.info("✅ Materialized :Community nodes.")
+
+    def embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """
+        Batch embedding wrapper.
+        Adjust payload/response handling based on your specific API.
+        """
+        # Example assumes an OpenAI-compatible interface or similar list-in/list-out
+        embeddings = []
+        for text in texts:
+            try:
+                resp = requests.post(
+                    self.embedder_url,
+                    json={"inputs": [text]},  # Sending as a list of one string
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                # Assuming response is a list of embeddings, even for single input
+                # e.g., [[0.1, 0.2, ...]]
+                embeddings.extend(
+                    resp.json()
+                )  # Use extend because response is list of lists
+            except Exception as e:
+                logger.error(f"Embedding failed for text '{text[:50]}...': {e}")
+                embeddings.append([])  # Append empty list for failed embeddings
+        return embeddings
 
     def create_chunks(self):
         logger.info("2️⃣  Creating GraphChunks (Node + Context).")

@@ -73,6 +73,7 @@ class GraphRetrievalClient:
 
     def clear_index(self):
         """
-        Clears the Qdrant collections.
+        Clears the Qdrant collections and community data from Neo4j.
         """
-        self.indexer.clear_qdrant_collections()
+        self.indexer._clear_graph_chunks()
+        self.indexer._clear_communities()
