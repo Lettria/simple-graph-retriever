@@ -226,6 +226,13 @@ class GraphRetriever:
                     node["chunk_score"] = chunk_scores[node_id]
                 if community_id in community_scores:
                     node["community_score"] = community_scores[community_id]
+            
+            # Sort nodes by chunk_score (descending), with 0 if not present
+            subgraph[0]["nodes"] = sorted(
+                subgraph[0]["nodes"],
+                key=lambda node: node.get("chunk_score", 0),
+                reverse=True,
+            )
 
         if not include_chunks:
             nodes_to_keep = [

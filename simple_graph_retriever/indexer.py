@@ -227,7 +227,7 @@ class GraphIndexer:
             MATCH (n)-[r]-(m)
             WITH type(r) as rel_type, labels(m) as n_labels, m
             RETURN collect(
-                rel_type + " -> " + coalesce(m.name, m.title, head(labels(m)), "Node")
+                rel_type + " -> " + head(labels(m)) + ":" + coalesce(m.label, m.name, m.title, "Node")
             )[0..10] as context_list // Capping context to 10 neighbors
         }
 
@@ -329,12 +329,12 @@ class GraphIndexer:
 
         CALL {
             WITH c
-            MATCH (n) WHERE n.community_id = c.id
+            MATCH (n) WHERE n.community_id = c.id AND NOT n:GraphChunk
             // Heuristic: Pick 'important' nodes by degree
             WITH n ORDER BY COUNT { (n)--() } DESC LIMIT 5
 
             // Re-generate basic text for these nodes
-            WITH n, labels(n)[0] + ": " + coalesce(n.name, n.title, "Item") as summary
+            WITH n, head(labels(n)) + ":" + coalesce(n.label, n.name, n.title, "Item") as summary
             RETURN collect(summary) as summaries
         }
 
@@ -343,7 +343,7 @@ class GraphIndexer:
         LIMIT $batch_size
         """
 
-        mark_done = "MATCH (c:Community {id: $id}) SET c.indexed = true"
+        mark_done = "MATCH (c:Community {id: $id}) SET c.indexed = true, c.text = $text"
 
         with self.driver.session() as session:
             while True:
@@ -380,7 +380,7 @@ class GraphIndexer:
                     )
 
                 for r in records:
-                    session.run(mark_done, id=r["id"])
+                    session.run(mark_done, id=r["id"], text=r["text"])
 
                 logger.info(f"   Indexed {len(points)} communities.")
 

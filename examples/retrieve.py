@@ -5,7 +5,7 @@ import json
 if __name__ == "__main__":
     client = GraphRetrievalClient()
     try:
-        query = "Pizza"
+        query = "battle"
 
         print(f"Retrieving subgraph for query: '{query}'")
 
