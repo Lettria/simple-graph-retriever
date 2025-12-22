@@ -4,7 +4,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchAny
 from neo4j import GraphDatabase
 
-from .models import RetrievalConfig
+from .models import RetrievalConfig, RetrievalResult
 from .config import logger
 
 
@@ -180,13 +180,13 @@ class GraphRetriever:
 
     def retrieve_graph(
         self, query: str, config: RetrievalConfig, include_chunks: bool = False
-    ):
+    ) -> RetrievalResult | None:
         """
         Retrieves a subgraph from the graph database based on a query string.
         """
         query_embedding = self.embed(query)
         if not query_embedding:
-            return []
+            return None
 
         community_results = self.retrieve_communities(query_embedding, config)
         community_scores = {c["community_id"]: c["score"] for c in community_results}
@@ -206,7 +206,7 @@ class GraphRetriever:
             )
 
         if not center_node_ids:
-            return []
+            return None
         # print(f"Number of center nodes: {len(center_node_ids)}")
         subgraph = self.fetch_subgraph(
             center_node_ids,
@@ -226,7 +226,7 @@ class GraphRetriever:
                     node["chunk_score"] = chunk_scores[node_id]
                 if community_id in community_scores:
                     node["community_score"] = community_scores[community_id]
-            
+
             # Sort nodes by chunk_score (descending), with 0 if not present
             subgraph[0]["nodes"] = sorted(
                 subgraph[0]["nodes"],
@@ -248,4 +248,6 @@ class GraphRetriever:
             subgraph[0]["nodes"] = nodes_to_keep
             subgraph[0]["relationships"] = relationships_to_keep
 
-        return subgraph
+        return RetrievalResult(
+            nodes=subgraph[0]["nodes"], relationships=subgraph[0]["relationships"]
+        )

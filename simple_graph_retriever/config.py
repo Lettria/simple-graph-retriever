@@ -5,7 +5,12 @@ from typing import Optional
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-logging.basicConfig(level=os.getenv("LOGLEVEL", "WARNING"))
+loglevel = os.getenv("LOGLEVEL", "INFO").upper()
+
+logging.basicConfig(
+    level=getattr(logging, loglevel, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
