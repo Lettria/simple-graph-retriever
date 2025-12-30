@@ -26,16 +26,14 @@ class Settings(BaseSettings):
     vector_size: int = 384
     loglevel: str = "WARNING"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="allow"
+    )
 
 
 try:
-    settings = Settings()
+    settings = Settings(**{})
 except ValidationError as e:
-    missing_fields = [
-        error["loc"][0] for error in e.errors() if error["type"] == "missing"
-    ]
-    logger.error(
-        f"Missing configuration fields: {', '.join(str(field) for field in missing_fields)}"
-    )
+    logger.error(e.json())
+
     sys.exit(1)
