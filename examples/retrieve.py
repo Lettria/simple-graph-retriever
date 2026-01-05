@@ -22,7 +22,9 @@ if __name__ == "__main__":
                 f"Retrieved {len(full_subgraph.nodes)} nodes and {len(full_subgraph.relationships)} relationships."
             )
             with open("retrieved_subgraph_full.json", "w") as f:
-                f.write(full_subgraph.model_dump_json(indent=2))
+                f.write(full_subgraph.json(indent=2))
+            with open("retrieved_subgraph_full.md", "w") as f:
+                f.write(full_subgraph.to_markdown())
         else:
             print("No results found.")
 
@@ -35,7 +37,7 @@ if __name__ == "__main__":
                 f"Retrieved {len(chunk_only_subgraph.nodes)} nodes and {len(chunk_only_subgraph.relationships)} relationships."
             )
             with open("retrieved_subgraph_chunk_only.json", "w") as f:
-                f.write(chunk_only_subgraph.model_dump_json(indent=2))
+                f.write(chunk_only_subgraph.json(indent=2))
         else:
             print("No results found.")
 
@@ -48,7 +50,7 @@ if __name__ == "__main__":
                 f"Retrieved {len(community_only_subgraph.nodes)} nodes and {len(community_only_subgraph.relationships)} relationships."
             )
             with open("retrieved_subgraph_community_only.json", "w") as f:
-                f.write(community_only_subgraph.model_dump_json(indent=2))
+                f.write(community_only_subgraph.json(indent=2))
         else:
             print("No results found.")
     finally:

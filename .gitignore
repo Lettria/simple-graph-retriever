@@ -6,3 +6,4 @@ dist/
 examples/save_neo4j
 docker-compose.yaml
 *.json
+examples/**.md
