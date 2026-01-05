@@ -19,10 +19,10 @@ if __name__ == "__main__":
         )
         if full_subgraph:
             print(
-                f"Retrieved {len(full_subgraph[0]['nodes'])} nodes and {len(full_subgraph[0]['relationships'])} relationships."
+                f"Retrieved {len(full_subgraph.nodes)} nodes and {len(full_subgraph.relationships)} relationships."
             )
             with open("retrieved_subgraph_full.json", "w") as f:
-                json.dump(full_subgraph, f, indent=2)
+                f.write(full_subgraph.model_dump_json(indent=2))
         else:
             print("No results found.")
 
@@ -32,10 +32,10 @@ if __name__ == "__main__":
         )
         if chunk_only_subgraph:
             print(
-                f"Retrieved {len(chunk_only_subgraph[0]['nodes'])} nodes and {len(chunk_only_subgraph[0]['relationships'])} relationships."
+                f"Retrieved {len(chunk_only_subgraph.nodes)} nodes and {len(chunk_only_subgraph.relationships)} relationships."
             )
             with open("retrieved_subgraph_chunk_only.json", "w") as f:
-                json.dump(chunk_only_subgraph, f, indent=2)
+                f.write(chunk_only_subgraph.model_dump_json(indent=2))
         else:
             print("No results found.")
 
@@ -45,10 +45,10 @@ if __name__ == "__main__":
         )
         if community_only_subgraph:
             print(
-                f"Retrieved {len(community_only_subgraph[0]['nodes'])} nodes and {len(community_only_subgraph[0]['relationships'])} relationships."
+                f"Retrieved {len(community_only_subgraph.nodes)} nodes and {len(community_only_subgraph.relationships)} relationships."
             )
             with open("retrieved_subgraph_community_only.json", "w") as f:
-                json.dump(community_only_subgraph, f, indent=2)
+                f.write(community_only_subgraph.model_dump_json(indent=2))
         else:
             print("No results found.")
     finally:

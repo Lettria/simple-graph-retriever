@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class RetrievalConfig(BaseModel):
@@ -15,6 +15,7 @@ class RetrievalConfig(BaseModel):
     community_expansion_limit: int = 25
     allowed_rel_types: Optional[List[str]] = None
     denied_rel_types: Optional[List[str]] = None
+    include_scores: bool = False
 
 
 class RetrievalNode(BaseModel):
@@ -22,8 +23,10 @@ class RetrievalNode(BaseModel):
     community_id: Optional[int] = None
     label: Optional[str] = None
     uuid: Optional[str] = None
-    chunk_score: Optional[float] = None
-    community_score: Optional[float] = None
+    # chunk_score: Optional[float] = None
+    # community_score: Optional[float] = None
+
+    model_config = ConfigDict(extra="allow")
 
     def __iter__(self):
         return iter(self.model_dump().items())
@@ -34,6 +37,8 @@ class RetrievalRelationship(BaseModel):
     start_node_element_id: str
     end_node_element_id: str
     type: str
+
+    model_config = ConfigDict(extra="allow")
 
     def __iter__(self):
         return iter(self.model_dump().items())

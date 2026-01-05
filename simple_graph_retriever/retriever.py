@@ -148,6 +148,7 @@ class GraphRetriever:
         allowed_rel_types: Optional[List[str]] = None,
         denied_rel_types: Optional[List[str]] = None,
     ):
+        print("Fetching subgraph...")
         rel_type_filter_clauses = []
         if allowed_rel_types:
             rel_type_filter_clauses.append("type(r) IN $allowed_rel_types")
@@ -248,6 +249,10 @@ class GraphRetriever:
             subgraph[0]["nodes"] = nodes_to_keep
             subgraph[0]["relationships"] = relationships_to_keep
 
+        if not config.include_scores:
+            for node in subgraph[0]["nodes"]:
+                node.pop("chunk_score", None)
+                node.pop("community_score", None)
         return RetrievalResult(
             nodes=subgraph[0]["nodes"], relationships=subgraph[0]["relationships"]
         )
