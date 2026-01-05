@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "neo4j",
-    "qdrant-client",
+    "qdrant-client==1.11.0",
     "requests",
     "tqdm",
     "igraph",
