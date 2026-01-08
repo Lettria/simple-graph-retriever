@@ -225,12 +225,11 @@ class GraphIndexer:
              ) as props_text
 
         // 2. Gather 1-hop context (Relationships + Neighbor Labels)
-        CALL {
-            WITH n
+        CALL (n) {
             MATCH (n)-[r]-(m)
             WITH type(r) as rel_type, labels(m) as n_labels, m
             RETURN collect(
-                rel_type + " -> " + head(labels(m)) + ":" + coalesce(m.label, m.name, m.title, "Node")
+                rel_type + " -> " + head(labels(m)) + ":" + coalesce(apoc.map.get(properties(m), 'label', null), apoc.map.get(properties(m), 'name', null), "Node")
             )[0..10] as context_list // Capping context to 10 neighbors
         }
 
@@ -330,14 +329,13 @@ class GraphIndexer:
         MATCH (c:Community)
         WHERE c.indexed IS NULL
 
-        CALL {
-            WITH c
+        CALL (c) {
             MATCH (n) WHERE n.community_id = c.id AND NOT n:GraphChunk
             // Heuristic: Pick 'important' nodes by degree
             WITH n ORDER BY COUNT { (n)--() } DESC LIMIT 5
 
             // Re-generate basic text for these nodes
-            WITH n, head(labels(n)) + ":" + coalesce(n.label, n.name, n.title, "Item") as summary
+            WITH n, head(labels(n)) + ":" + coalesce(apoc.map.get(properties(n), 'label', null), apoc.map.get(properties(n), 'name', null), "Item") as summary
             RETURN collect(summary) as summaries
         }
 
