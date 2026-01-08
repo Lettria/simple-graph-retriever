@@ -12,7 +12,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+# Set httpx log level to WARNING
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Suppress neo4j label warnings
+logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
 
 logger = logging.getLogger("simple_graph_retriever")
 
