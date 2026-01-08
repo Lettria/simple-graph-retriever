@@ -34,7 +34,7 @@ This SDK handles the heavy lifting of graph processing, including:
 To install the SDK, clone this repository and use pip to install it in editable mode, which is recommended for development.
 
 ```bash
-pip install simple_graph_retriever==1.0.0-rc.7
+pip install simple_graph_retriever==1.0.0-rc.8
 ```
 
 ## 2. Configuration
