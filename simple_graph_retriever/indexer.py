@@ -207,6 +207,7 @@ class GraphIndexer:
 
     def create_chunks(self):
         logger.info("2️⃣  Creating GraphChunks (Node + Context).")
+        self._clear_graph_chunks()
         query = """
         MATCH (n)
         WHERE NOT n:GraphChunk AND NOT n:Community
