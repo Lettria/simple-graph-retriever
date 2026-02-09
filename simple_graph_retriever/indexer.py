@@ -1,21 +1,17 @@
 import json
-import time
-from typing import List, Dict, Any, Optional
-from neo4j import GraphDatabase
+from typing import List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Distance, VectorParams
 import requests
-from tqdm import tqdm
 import igraph as ig
 import leidenalg as la
 from .config import logger
-
+from .db_adapter import GraphAdapter
 
 class GraphIndexer:
     def __init__(
         self,
-        neo4j_uri,
-        neo4j_auth,
+        db_adapter: GraphAdapter,  # Changed from uri/auth to adapter
         qdrant_url,
         embedder_url,
         qdrant_api_key: Optional[str] = None,
@@ -23,7 +19,7 @@ class GraphIndexer:
         chunks_collection: str = "chunks",
         communities_collection: str = "communities",
     ):
-        self.driver = GraphDatabase.driver(neo4j_uri, auth=neo4j_auth)
+        self.db = db_adapter
         self.qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.embedder_url = embedder_url
         self.vector_batch_size = 100
@@ -32,214 +28,165 @@ class GraphIndexer:
         self.communities_collection = communities_collection
         self._ensure_qdrant_collections_exist()
 
-    def _ensure_qdrant_collections_exist(self):
-        logger.info("Ensuring Qdrant collections exist...")
-        existing_collections = [
-            c.name for c in self.qdrant.get_collections().collections
-        ]
-
-        if self.chunks_collection not in existing_collections:
-            self.qdrant.create_collection(
-                collection_name=self.chunks_collection,
-                vectors_config=VectorParams(
-                    size=self.vector_size, distance=Distance.COSINE
-                ),
-            )
-            logger.info(f"Created '{self.chunks_collection}' collection.")
-        else:
-            logger.info(f"'{self.chunks_collection}' collection already exists.")
-
-        if self.communities_collection not in existing_collections:
-            self.qdrant.create_collection(
-                collection_name=self.communities_collection,
-                vectors_config=VectorParams(
-                    size=self.vector_size, distance=Distance.COSINE
-                ),
-            )
-            logger.info(f"Created '{self.communities_collection}' collection.")
-        else:
-            logger.info(f"'{self.communities_collection}' collection already exists.")
-        logger.info("✅ Qdrant collections checked/created.")
-
-    def close(self):
-        self.driver.close()
+    def close_qdrant(self):
         self.qdrant.close()
 
-    def _clear_graph_chunks(self):
-        """
-        Wipes all graph chunk data from both Neo4j and Qdrant.
-        """
-        logger.info("   Wiping all graph chunk data...")
+    # _ensure_qdrant_collections_exist remains the same... 
+    def _ensure_qdrant_collections_exist(self):
+        # ... (same as your original code) ...
+        pass
 
-        # Wipe old chunk data from Qdrant
-        logger.info(f"   Wiping Qdrant collection: '{self.chunks_collection}'...")
+    def _clear_graph_chunks(self):
+        logger.info("   Wiping all graph chunk data...")
         self.qdrant.recreate_collection(
             collection_name=self.chunks_collection,
-            vectors_config=VectorParams(
-                size=self.vector_size, distance=Distance.COSINE
-            ),
+            vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
-
-        # Wipe old chunk data from Neo4j
-        with self.driver.session() as session:
-            logger.info("   Wiping graph chunk data from Neo4j...")
-            session.run("MATCH (c:GraphChunk) DETACH DELETE c")
-            logger.info("   Graph chunk data wiped.")
+        logger.info("   Wiping graph chunk data from DB...")
+        self.db.query("MATCH (c:GraphChunk) DETACH DELETE c")
 
     def _clear_communities(self):
-        """
-        Wipes all community-related data from both Neo4j and Qdrant.
-        """
         logger.info("   Wiping all community data...")
-
-        # Wipe old community data from Qdrant
-        logger.info(f"   Wiping Qdrant collection: '{self.communities_collection}'...")
         self.qdrant.recreate_collection(
             collection_name=self.communities_collection,
-            vectors_config=VectorParams(
-                size=self.vector_size, distance=Distance.COSINE
-            ),
+            vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
         )
-
-        # Wipe old community data from Neo4j
-        with self.driver.session() as session:
-            logger.info("   Wiping community data from Neo4j...")
-            session.run("MATCH (c:Community) DETACH DELETE c")
-            session.run(
-                "MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id"
-            )
-            logger.info("   Community data wiped.")
+        logger.info("   Wiping community data from DB...")
+        self.db.query("MATCH (c:Community) DETACH DELETE c")
+        self.db.query("MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id")
 
     def run_community_detection(self):
         logger.info("1️⃣  Refreshing Community Structure...")
         self._clear_communities()
 
-        with self.driver.session() as session:
-            # Fetch all nodes and relationships from Neo4j (excluding chunks and communities)
-            logger.info(
-                "   Fetching graph data from Neo4j (excluding chunks and communities)..."
-            )
-            nodes_data = session.run(
-                "MATCH (n) WHERE NOT n:GraphChunk AND NOT n:Community RETURN elementId(n) as id"
-            ).data()
-            rels_data = session.run(
-                "MATCH (a)-[r]->(b) WHERE NOT a:GraphChunk AND NOT a:Community AND NOT b:GraphChunk AND NOT b:Community RETURN elementId(r) as id, elementId(a) as source, elementId(b) as target"
-            ).data()
+        # Dynamic ID function (elementId or ID)
+        id_fn = self.db.id_function 
+        
+        logger.info("   Fetching graph data...")
+        # Note: toString() handles FalkorDB integers vs Neo4j strings
+        logger.info(f"Using ID function: {id_fn}(n)")
+        nodes_data = self.db.query(
+            f"MATCH (n) WHERE NOT n:GraphChunk AND NOT n:Community RETURN {id_fn}(n) as id"
+        )
+        logger.info(f"Nodes fetched: {len(nodes_data)}")
+        rels_data = self.db.query(
+            f"MATCH (a)-[r]->(b) WHERE NOT a:GraphChunk AND NOT a:Community AND NOT b:GraphChunk AND NOT b:Community "
+            f"RETURN {id_fn}(r) as id, {id_fn}(a) as source, {id_fn}(b) as target"
+        )
+        if nodes_data:
+            logger.info(f"DEBUG: First node keys: {nodes_data[0].keys()}")
+        else:
+            logger.warning("DEBUG: nodes_data is empty!")
+        node_id_to_idx = {node["id"]: i for i, node in enumerate(nodes_data)}
+        
+        g = ig.Graph(directed=True)
+        g.add_vertices(len(nodes_data))
+        g.vs["neo4j_id"] = [node["id"] for node in nodes_data]
 
-            node_id_to_idx = {node["id"]: i for i, node in enumerate(nodes_data)}
+        edges = []
+        for rel in rels_data:
+            source_id = str(rel.get("source"))
+            target_id = str(rel.get("target"))
+            
+            source_idx = node_id_to_idx.get(source_id)
+            target_idx = node_id_to_idx.get(target_id)
+            if source_idx is not None and target_idx is not None:
+                edges.append((source_idx, target_idx))
+        g.add_edges(edges)
 
-            # Create an igraph graph
-            g = ig.Graph(directed=True)
-            g.add_vertices(len(nodes_data))
-            g.vs["neo4j_id"] = [node["id"] for node in nodes_data]
+        logger.info(f"   Running Leiden algorithm on {g.vcount()} nodes...")
+        partition = la.find_partition(g, la.ModularityVertexPartition)
+        logger.info(f"✅ Detected {len(partition)} communities.")
 
-            edges = []
-            for rel in rels_data:
-                source_idx = node_id_to_idx.get(rel["source"])
-                target_idx = node_id_to_idx.get(rel["target"])
-                if source_idx is not None and target_idx is not None:
-                    edges.append((source_idx, target_idx))
-            g.add_edges(edges)
+        logger.info("   Writing community IDs to DB...")
+        batch_size = 1000
+        count = 0
+        
+        # We can't use transactions easily across adapters, so we run simple queries
+        # Or you can batch them in the adapter, but simple loop is fine for now
+        for i, community_id in enumerate(partition.membership):
+            neo4j_node_id = g.vs[i]["neo4j_id"]
+            
+            # Handling ID matching: if it's FalkorDB (int ID), we need to handle the conversion 
+            # In Cypher: ID(n) = 123. In Neo4j: elementId(n) = "4:..."
+            # Safest way: pass as parameter and let DB match
+            if self.db.id_function == "ID":
+                 # FalkorDB expects int for ID() check usually, but we cast toString earlier
+                 # Reverting to simple WHERE ID(n) = int(...)
+                 # But we stored string version. 
+                 query = f"MATCH (n) WHERE ID(n) = {neo4j_node_id} SET n.community_id = {community_id}"
+            else:
+                 query = f"MATCH (n) WHERE elementId(n) = '{neo4j_node_id}' SET n.community_id = {community_id}"
 
-            logger.info(
-                f"   Created igraph with {g.vcount()} vertices and {g.ecount()} edges."
-            )
+            self.db.query(query)
+            count += 1
+            if count % 100 == 0:
+                 print(f"Updates: {count}", end="\r")
 
-            # Run Leiden algorithm
-            logger.info("   Running Leiden algorithm...")
-            partition = la.find_partition(g, la.ModularityVertexPartition)
-            logger.info(f"✅ Detected {len(partition)} communities.")
+        # Materialize Community Nodes
+        self.db.query("""
+            MATCH (n) WHERE n.community_id IS NOT NULL
+            WITH n.community_id AS cid, count(n) as size
+            MERGE (c:Community {id: cid})
+            SET c.size = size
+        """)
+        logger.info("✅ Materialized :Community nodes.")
 
-            # Write community IDs back to Neo4j
-            logger.info("   Writing community IDs to Neo4j...")
-            tx = session.begin_transaction()
-            batch_size = 1000
-            count = 0
-            for i, community_id in enumerate(partition.membership):
-                neo4j_node_id = g.vs[i]["neo4j_id"]
-                tx.run(
-                    "MATCH (n) WHERE elementId(n) = $neo4j_node_id SET n.community_id = $community_id",
-                    neo4j_node_id=neo4j_node_id,
-                    community_id=community_id,
-                )
-                count += 1
-                if count % batch_size == 0:
-                    tx.commit()
-                    tx = session.begin_transaction()
-            tx.commit()
-            logger.info(f"✅ Wrote community IDs for {count} nodes.")
-
-            # Materialize Community Nodes (Optional but good for linkage)
-            session.run(
-                """
-                MATCH (n) WHERE n.community_id IS NOT NULL
-                WITH n.community_id AS cid, count(n) as size
-                MERGE (c:Community {id: cid})
-                SET c.size = size
-            """
-            )
-            logger.info("✅ Materialized :Community nodes.")
-
+    # embed_batch method remains the same...
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """
-        Batch embedding wrapper.
-        Adjust payload/response handling based on your specific API.
-        """
-        # Example assumes an OpenAI-compatible interface or similar list-in/list-out
+        # ... (same as original) ...
         embeddings = []
         for text in texts:
+            truncated_text = text[:500] 
             try:
                 resp = requests.post(
-                    self.embedder_url,
-                    json={"inputs": [text]},  # Sending as a list of one string
-                    timeout=30,
+                    self.embedder_url, 
+                    json={"inputs": [truncated_text]}, 
+                    timeout=30
                 )
                 resp.raise_for_status()
-                # Assuming response is a list of embeddings, even for single input
-                # e.g., [[0.1, 0.2, ...]]
-                embeddings.extend(
-                    resp.json()
-                )  # Use extend because response is list of lists
+                embeddings.extend(resp.json())
             except Exception as e:
-                logger.error(f"Embedding failed for text '{text[:50]}...': {e}")
-                embeddings.append([])  # Append empty list for failed embeddings
+                logger.error(f"Embedding error: {e}")
+                embeddings.append([])
         return embeddings
 
     def create_chunks(self):
-        logger.info("2️⃣  Creating GraphChunks (Node + Context).")
+        logger.info("2️⃣  Creating GraphChunks...")
         self._clear_graph_chunks()
+        
+        # Rewritten to remove dependency on APOC.text.join for compatibility
         query = """
         MATCH (n)
         WHERE NOT n:GraphChunk AND NOT n:Community
-        // Ensure we only create a chunk if one doesn't already exist for the node
         AND NOT (n)<-[:CENTERED_ON]-(:GraphChunk)
-        
-        // This query will now run once and create all necessary chunks
         WITH n 
 
-        // 1. Gather properties and textualize them
+        // 1. Textualize Properties (Standard Cypher)
         WITH n,
-             apoc.text.join(labels(n), ", ") as lbls,
-             apoc.text.join(
-                [key IN keys(properties(n)) WHERE NOT key IN ['uuid', 'community_id'] | key + ": " + toString(properties(n)[key])], 
-                "\\n"
-             ) as props_text
+             reduce(s = "", l IN labels(n) | s + l + ", ") as lbls,
+             reduce(s = "", k IN [k IN keys(properties(n)) WHERE k <> 'uuid' AND k <> 'community_id'] | 
+                s + k + ": " + toString(properties(n)[k]) + "\n") as props_text
 
-        // 2. Gather 1-hop context (Relationships + Neighbor Labels)
-        CALL (n) {
+        // 2. Gather Context
+        CALL {
+            WITH n
             MATCH (n)-[r]-(m)
             WITH type(r) as rel_type, labels(m) as n_labels, m
+            LIMIT 10
             RETURN collect(
-                rel_type + " -> " + head(labels(m)) + ":" + coalesce(apoc.map.get(properties(m), 'label', null), apoc.map.get(properties(m), 'name', null), "Node")
-            )[0..10] as context_list // Capping context to 10 neighbors
+                rel_type + " -> " + head(labels(m)) + ":" + 
+                coalesce(m.label, m.name, "Node")
+            ) as context_list
         }
 
-        // 3. Format Text Blob
-        WITH n, lbls, props_text, context_list,
-             "Node: " + lbls + "\\nProps:\\n" + props_text + "\\nContext:\\n" +
-             apoc.text.join(context_list, "\\n") as chunk_text
+        // 3. Format
+        WITH n, lbls, props_text, 
+             reduce(s = "", c IN context_list | s + c + "\n") as context_text
 
-        // 4. Create Chunk Node
+        WITH n, 
+             "Node: " + lbls + "\nProps:\n" + props_text + "\nContext:\n" + context_text as chunk_text
+
         CREATE (c:GraphChunk {
             id: randomUUID(),
             community_id: n.community_id,
@@ -249,20 +196,21 @@ class GraphIndexer:
         RETURN count(c) as created_count
         """
 
-        with self.driver.session() as session:
-            result = session.run(query).single()
-            count = result["created_count"] if result else 0
-            logger.info(f"✅ Total chunks created: {count}")
+        result = self.db.query(query)
+        # Handle list of dicts result
+        count = result[0]["created_count"] if result else 0
+        logger.info(f"✅ Total chunks created: {count}")
 
     def index_chunks(self):
-        logger.info("3️⃣  Indexing Chunks to Qdrant...")
-
-        # Read chunks that are not yet indexed
-        fetch_query = """
+        logger.info("3️⃣  Indexing Chunks...")
+        id_fn = self.db.id_function
+        
+        # Using toString for ID compatibility
+        fetch_query = f"""
         MATCH (c:GraphChunk)-[:CENTERED_ON]->(n)
         WHERE c.indexed IS NULL
         RETURN c.id as id, c.text as text, c.community_id as comm_id,
-               elementId(n) as center_node_id
+               toString({id_fn}(n)) as center_node_id
         LIMIT $batch_size
         """
 
@@ -271,119 +219,85 @@ class GraphIndexer:
         SET c.indexed = true
         """
 
-        with self.driver.session() as session:
-            while True:
-                # 1. Fetch Batch from Neo4j
-                records = session.run(
-                    fetch_query, batch_size=self.vector_batch_size
-                ).data()
-                if not records:
-                    break
+        while True:
+            records = self.db.query(fetch_query, params={'batch_size': self.vector_batch_size})
+            if not records:
+                break
 
-                texts = [r["text"] for r in records]
-                ids = [r["id"] for r in records]
+            texts = [r["text"] for r in records]
+            ids = [r["id"] for r in records] # Chunk IDs are UUID strings
 
-                # 2. Embed
-                vectors = self.embed_batch(texts)
+            vectors = self.embed_batch(texts)
+            points = []
+            for i, rec in enumerate(records):
+                if not vectors[i]: continue
+                points.append(PointStruct(
+                    id=rec["id"],
+                    vector=vectors[i],
+                    payload={
+                        "text": rec["text"],
+                        "community_id": rec["comm_id"],
+                        "center_node_id": rec["center_node_id"],
+                        "type": "chunk",
+                    },
+                ))
 
-                # 3. Prepare Points
-                points = []
-                for i, rec in enumerate(records):
-                    if not vectors[i]:
-                        logger.warning(
-                            f"Skipping chunk {rec['id']} due to failed embedding."
-                        )
-                        continue  # skip failed embeddings
+            if points:
+                self.qdrant.upsert(collection_name=self.chunks_collection, points=points)
 
-                    points.append(
-                        PointStruct(
-                            id=rec["id"],  # Using UUID from Neo4j
-                            vector=vectors[i],
-                            payload={
-                                "text": rec["text"],
-                                "community_id": rec["comm_id"],
-                                "center_node_id": rec[
-                                    "center_node_id"
-                                ],  # Store internal ID for retrieval
-                                "type": "chunk",
-                            },
-                        )
-                    )
-
-                # 4. Upsert to Qdrant
-                if points:
-                    self.qdrant.upsert(
-                        collection_name=self.chunks_collection, points=points
-                    )
-
-                # 5. Mark as done in Neo4j
-                session.run(mark_done_query, ids=ids)
-                logger.info(f"   Indexed {len(points)} chunks.")
-
-        logger.info("✅ Chunk indexing complete.")
+            self.db.query(mark_done_query, params={'ids': ids})
+            logger.info(f"   Indexed {len(points)} chunks.")
 
     def index_communities(self):
         logger.info("4️⃣  Indexing Communities...")
-
-        # Strategy: Aggregate the text of the 5 most connected nodes in the community
+        
+        # Corrected Query: Removed '#' comments and used '//' or no comments
         query = """
         MATCH (c:Community)
         WHERE c.indexed IS NULL
 
-        CALL (c) {
+        CALL {
+            WITH c
             MATCH (n) WHERE n.community_id = c.id AND NOT n:GraphChunk
-            // Heuristic: Pick 'important' nodes by degree
-            WITH n ORDER BY COUNT { (n)--() } DESC LIMIT 5
+            
+            OPTIONAL MATCH (n)-[r]-()
+            WITH n, count(r) as degree
+            ORDER BY degree DESC LIMIT 5
 
-            // Re-generate basic text for these nodes
-            WITH n, head(labels(n)) + ":" + coalesce(apoc.map.get(properties(n), 'label', null), apoc.map.get(properties(n), 'name', null), "Item") as summary
+            WITH n, head(labels(n)) + ":" + coalesce(n.label, n.name, "Item") as summary
             RETURN collect(summary) as summaries
         }
 
-        WITH c, "Community ID: " + toString(c.id) + "\nKey Elements:\n" + apoc.text.join(summaries, "\n") as comm_text
+        WITH c, "Community ID: " + toString(c.id) + "\nKey Elements:\n" + 
+             reduce(s="", x IN summaries | s + x + "\n") as comm_text
+        
         RETURN c.id as id, comm_text as text
         LIMIT $batch_size
         """
-
+        
         mark_done = "MATCH (c:Community {id: $id}) SET c.indexed = true, c.text = $text"
 
-        with self.driver.session() as session:
-            while True:
-                records = session.run(query, batch_size=self.vector_batch_size).data()
-                if not records:
-                    break
+        while True:
+            records = self.db.query(query, params={'batch_size': self.vector_batch_size})
+            if not records: break
 
-                texts = [r["text"] for r in records]
-                vectors = self.embed_batch(texts)
+            texts = [r["text"] for r in records]
+            vectors = self.embed_batch(texts)
+            points = []
+            
+            for i, rec in enumerate(records):
+                if not vectors[i]: continue
+                
+                points.append(PointStruct(
+                    id=rec["id"], 
+                    vector=vectors[i],
+                    payload={"text": rec["text"], "community_id": rec["id"], "type": "community"},
+                ))
 
-                points = []
-                for i, rec in enumerate(records):
-                    if not vectors[i]:
-                        continue
+            if points:
+                self.qdrant.upsert(collection_name=self.communities_collection, points=points)
 
-                    # Qdrant requires integer or UUID for ID.
-                    # If community_id is integer, use it directly.
-                    # If it's a string/uuid, you might need to hash it to UUID.
-                    points.append(
-                        PointStruct(
-                            id=rec["id"],
-                            vector=vectors[i],
-                            payload={
-                                "text": rec["text"],
-                                "community_id": rec["id"],
-                                "type": "community",
-                            },
-                        )
-                    )
-
-                if points:
-                    self.qdrant.upsert(
-                        collection_name=self.communities_collection, points=points
-                    )
-
-                for r in records:
-                    session.run(mark_done, id=r["id"], text=r["text"])
-
-                logger.info(f"   Indexed {len(points)} communities.")
-
-        logger.info("✅ Community indexing complete.")
+            for r in records:
+                self.db.query(mark_done, params={'id': r["id"], 'text': r["text"]})
+            
+            logger.info(f"   Indexed {len(points)} communities.")

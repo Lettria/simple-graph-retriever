@@ -17,7 +17,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "neo4j",
     "qdrant-client==1.11.0",
     "requests",
     "tqdm",
@@ -26,6 +25,12 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
 ]
+
+[project.optional-dependencies]
+neo4j = ["neo4j"]
+falkordb = ["falkordb"]
+# Convenience option to install everything
+all = ["neo4j", "falkordb"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["simple_graph_retriever"]
