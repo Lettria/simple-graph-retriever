@@ -16,7 +16,7 @@
           {
             "files": ["README.md"],
             "from": "pip install simple_graph_retriever\\[neo4j\\]==.*",
-            "to": "pip install simple_graph_retriever\\[neo4j\\]==${nextRelease.version}",
+            "to": "pip install simple_graph_retriever[neo4j]==${nextRelease.version}",
             "results": [
               {
                 "file": "README.md",
@@ -30,7 +30,7 @@
           {
             "files": ["README.md"],
             "from": "pip install simple_graph_retriever\\[falkordb\\]==.*",
-            "to": "pip install simple_graph_retriever\\[falkordb\\]==${nextRelease.version}",
+            "to": "pip install simple_graph_retriever[falkordb]==${nextRelease.version}",
             "results": [
               {
                 "file": "README.md",
@@ -44,7 +44,7 @@
           {
             "files": ["README.md"],
             "from": "pip install simple_graph_retriever\\[all\\]==.*",
-            "to": "pip install simple_graph_retriever\\[all\\]==${nextRelease.version}",
+            "to": "pip install simple_graph_retriever[all]==${nextRelease.version}",
             "results": [
               {
                 "file": "README.md",
