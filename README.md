@@ -17,6 +17,10 @@ This SDK handles the heavy lifting of graph processing, including:
   - [Table of Contents](#table-of-contents)
   - [1. Installation](#1-installation)
   - [2. Configuration](#2-configuration)
+    - [Common Configuration](#common-configuration)
+    - [Neo4j Specific Configuration](#neo4j-specific-configuration)
+    - [FalkorDB Specific Configuration](#falkordb-specific-configuration)
+    - [Example `.env` files](#example-env-files)
   - [3. Usage](#3-usage)
     - [Initializing the Client](#initializing-the-client)
     - [Indexing the Graph](#indexing-the-graph)
@@ -36,19 +40,19 @@ To install the SDK, clone this repository and use pip. You can choose which data
 **Install with Neo4j support:**
 
 ```bash
-pip install "simple_graph_retriever[neo4j]"
+pip install simple_graph_retriever[neo4j]==1.0.0-rc.11
 ```
 
 **Install with FalkorDB support:**
 
 ```bash
-pip install "simple_graph_retriever[falkordb]"
+pip install simple_graph_retriever[falkordb]==1.0.0-rc.11
 ```
 
 **Install with support for both:**
 
 ```bash
-pip install "simple_graph_retriever[all]"
+pip install simple_graph_retriever[all]==1.0.0-rc.11
 ```
 
 ## 2. Configuration
