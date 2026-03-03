@@ -14,17 +14,28 @@ logging.basicConfig(
 
 # Set httpx log level to WARNING
 logging.getLogger("httpx").setLevel(logging.WARNING)
-
-# Suppress neo4j label warnings
 logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
 
 logger = logging.getLogger("simple_graph_retriever")
 
 
 class Settings(BaseSettings):
+    # Selector: "neo4j" or "falkordb"
+    graph_db_type: str = "neo4j"
+
+    # Neo4j Settings
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "password"
+
+    # FalkorDB Settings
+    falkordb_host: str = "localhost"
+    falkordb_port: int = 6379
+    falkordb_username: Optional[str] = None
+    falkordb_password: Optional[str] = None
+    falkordb_graph_name: str = "my_graph"
+
+    # Qdrant & Embedder Settings
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: Optional[str] = None
     qdrant_chunks_collection: str = "chunks"
@@ -42,5 +53,4 @@ try:
     settings = Settings(**{})
 except ValidationError as e:
     logger.error(e.json())
-
     sys.exit(1)

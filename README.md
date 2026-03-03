@@ -1,6 +1,6 @@
 # Simple Graph Retriever
 
-A Python SDK for indexing a Neo4j graph into a vector database (Qdrant) and performing retrieval-augmented generation (RAG) tasks against it.
+A Python SDK for indexing a graph database (**Neo4j** or **FalkorDB**) into a vector database (Qdrant) and performing retrieval-augmented generation (RAG) tasks against it.
 
 This SDK handles the heavy lifting of graph processing, including:
 
@@ -31,21 +31,35 @@ This SDK handles the heavy lifting of graph processing, including:
 
 ## 1. Installation
 
-To install the SDK, clone this repository and use pip to install it in editable mode, which is recommended for development.
+To install the SDK, clone this repository and use pip. You can choose which database driver to install using optional dependencies.
+
+**Install with Neo4j support:**
 
 ```bash
-pip install simple_graph_retriever==1.0.0-rc.11
+pip install "simple_graph_retriever[neo4j]"
+```
+
+**Install with FalkorDB support:**
+
+```bash
+pip install "simple_graph_retriever[falkordb]"
+```
+
+**Install with support for both:**
+
+```bash
+pip install "simple_graph_retriever[all]"
 ```
 
 ## 2. Configuration
 
-The SDK is configured via environment variables, which are loaded from a `.env` file in your project's root directory.
+The SDK is configured via environment variables, which are loaded from a `.env` file in your project's root directory. You must configure **either** Neo4j **or** FalkorDB.
+
+### Common Configuration
 
 | Variable                        | Default Value           | Description                                                                                       |
 | ------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------- |
-| `NEO4J_URI`                     | `bolt://localhost:7687` | The URI for your Neo4j database.                                                                  |
-| `NEO4J_USER`                    | `neo4j`                 | The username for your Neo4j database.                                                             |
-| `NEO4J_PASSWORD`                | `password`              | The password for your Neo4j database.                                                             |
+| `GRAPH_DATABASE_TYPE`           | `neo4j`                 | The type of database to use: `neo4j` or `falkordb`.                                               |
 | `QDRANT_URL`                    | `http://localhost:6333` | The URL for your Qdrant vector database instance.                                                 |
 | `QDRANT_API_KEY`                | `None`                  | Optional: The API key for authenticating with your Qdrant instance.                               |
 | `QDRANT_CHUNKS_COLLECTION`      | `chunks`                | The name of the collection for storing graph chunks.                                              |
@@ -54,21 +68,47 @@ The SDK is configured via environment variables, which are loaded from a `.env` 
 | `VECTOR_SIZE`                   | `384`                   | The dimension of the vectors produced by your embedding model.                                    |
 | `LOGLEVEL`                      | `INFO`                  | The logging level for the SDK (`DEBUG`, `INFO`, `WARNING`, `ERROR`).                              |
 
-**Example `.env` file:**
+### Neo4j Specific Configuration
+
+| Variable         | Default Value           | Description                           |
+| ---------------- | ----------------------- | ------------------------------------- |
+| `NEO4J_URI`      | `bolt://localhost:7687` | The URI for your Neo4j database.      |
+| `NEO4J_USER`     | `neo4j`                 | The username for your Neo4j database. |
+| `NEO4J_PASSWORD` | `password`              | The password for your Neo4j database. |
+
+### FalkorDB Specific Configuration
+
+| Variable            | Default Value | Description                            |
+| ------------------- | ------------- | -------------------------------------- |
+| `FALKORDB_HOST`     | `localhost`   | The host for your FalkorDB instance.   |
+| `FALKORDB_PORT`     | `6379`        | The port for your FalkorDB instance.   |
+| `FALKORDB_PASSWORD` | `None`        | Optional: Password for Redis/FalkorDB. |
+| `FALKORDB_KEY`      | `graph`       | The key (graph name) used in FalkorDB. |
+
+---
+
+### Example `.env` files
+
+**Option A: Using Neo4j**
 
 ```dotenv
-# Neo4j Database Credentials
+GRAPH_DATABASE_TYPE="neo4j"
 NEO4J_URI="bolt://localhost:7687"
 NEO4J_USER="neo4j"
 NEO4J_PASSWORD="your_secure_password"
 
-# Qdrant Vector Database URL
 QDRANT_URL="http://localhost:6333"
-QDRANT_API_KEY="your_qdrant_api_key" # Optional
-QDRANT_CHUNKS_COLLECTION="chunks"
-QDRANT_COMMUNITIES_COLLECTION="communities"
+EMBEDDER_URL="http://localhost:8080/embed"
+```
 
-# Text Embedding Model URL
+**Option B: Using FalkorDB**
+
+```dotenv
+GRAPH_DATABASE_TYPE="falkordb"
+FALKORDB_HOST="localhost"
+FALKORDB_PORT="6379"
+
+QDRANT_URL="http://localhost:6333"
 EMBEDDER_URL="http://localhost:8080/embed"
 ```
 
@@ -76,18 +116,18 @@ EMBEDDER_URL="http://localhost:8080/embed"
 
 ### Initializing the Client
 
-The main entry point is the `GraphRetrievalClient`. It automatically loads settings from your `.env` file.
+The main entry point is the `GraphRetrievalClient`. It automatically loads settings from your `.env` file and initializes the appropriate database driver (Neo4j or FalkorDB) based on your configuration.
 
 ```python
 from graph_retrieval_sdk.client import GraphRetrievalClient
 
-# Initialize the client
+# Initialize the client (backend determined by env vars)
 client = GraphRetrievalClient()
 ```
 
 ### Indexing the Graph
 
-The `index()` method runs the full, idempotent pipeline to populate Qdrant with your graph data.
+The `index()` method runs the full, idempotent pipeline to populate Qdrant with data from your connected graph database.
 
 ```python
 # This runs the full pipeline:
@@ -167,10 +207,11 @@ The project is organized as a standard Python package:
 │   ├── config.py         # Configuration and logging setup
 │   ├── indexer.py        # Logic for indexing the graph
 │   ├── retriever.py      # Logic for retrieving subgraphs
+│   ├── db/               # Database adapters
+│   │   ├── neo4j.py
+│   │   └── falkordb.py
 │   └── models.py         # Pydantic models (e.g., RetrievalConfig)
 ├── examples/
-│   ├── retrieve_graph.py
-│   └── run_indexing.py
 ├── pyproject.toml        # Project metadata and dependencies
 └── README.md             # This file
 ```
