@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-from neo4j import GraphDatabase
+try:
+    from neo4j import GraphDatabase
+except ImportError:
+    GraphDatabase = None
 try:
     from falkordb import FalkorDB
 except ImportError:
@@ -26,6 +29,8 @@ class GraphAdapter(ABC):
 
 class Neo4jAdapter(GraphAdapter):
     def __init__(self, uri, auth):
+        if GraphDatabase is None:
+            raise ImportError("Neo4j client not installed. Run 'pip install simple-graph-retriever[neo4j]'")
         self.driver = GraphDatabase.driver(uri, auth=auth)
         self.driver.verify_connectivity()
 
