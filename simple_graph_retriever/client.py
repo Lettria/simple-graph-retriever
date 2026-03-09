@@ -2,14 +2,13 @@ from typing import Optional, Tuple
 from .models import RetrievalConfig
 from .indexer import GraphIndexer
 from .retriever import GraphRetriever
-from .config import settings
+from .config import settings, logger
 from .db_adapter import Neo4jAdapter, FalkorDBAdapter, GraphAdapter
+
 
 class GraphRetrievalClient:
     def __init__(
         self,
-        # Common
-        graph_db_type: Optional[str] = None,
         # Neo4j
         neo4j_uri: Optional[str] = None,
         neo4j_auth: Optional[Tuple[str, str]] = None,
@@ -26,29 +25,37 @@ class GraphRetrievalClient:
         vector_size: Optional[int] = None,
     ):
         # 1. Initialize Database Adapter
-        db_type = graph_db_type or settings.graph_db_type
-        
         self.db_adapter: GraphAdapter
-        
-        if db_type.lower() == "falkordb":
+
+        if settings.falkordb_password:
             self.db_adapter = FalkorDBAdapter(
                 host=falkordb_host or settings.falkordb_host,
                 port=falkordb_port or settings.falkordb_port,
-                username=settings.falkordb_username, # Optional
-                password=settings.falkordb_password, # Optional
-                graph_name=falkordb_graph_name or settings.falkordb_graph_name
+                username=settings.falkordb_username,  # Optional
+                password=settings.falkordb_password,  # Optional
+                graph_name=falkordb_graph_name or settings.falkordb_graph_name,
             )
-        else:
+            logger.info("Initialized FalkorDBAdapter with provided settings.")
+        elif settings.neo4j_password:
             # Default to Neo4j
             uri = neo4j_uri or settings.neo4j_uri
             auth = neo4j_auth or (settings.neo4j_user, settings.neo4j_password)
             self.db_adapter = Neo4jAdapter(uri=uri, auth=auth)
+            logger.info("Initialized Neo4jAdapter with provided settings.")
+        else:
+            raise ValueError(
+                "No valid database configuration found. Please provide either FalkorDB or Neo4j credentials."
+            )
 
         # 2. Settings
         qdrant_url = qdrant_url or settings.qdrant_url
         qdrant_api_key = qdrant_api_key or settings.qdrant_api_key
-        qdrant_chunks_collection = qdrant_chunks_collection or settings.qdrant_chunks_collection
-        qdrant_communities_collection = qdrant_communities_collection or settings.qdrant_communities_collection
+        qdrant_chunks_collection = (
+            qdrant_chunks_collection or settings.qdrant_chunks_collection
+        )
+        qdrant_communities_collection = (
+            qdrant_communities_collection or settings.qdrant_communities_collection
+        )
         embedder_url = embedder_url or settings.embedder_url
         vector_size = vector_size or settings.vector_size
 
@@ -94,5 +101,9 @@ class GraphRetrievalClient:
         self.indexer._clear_graph_chunks()
         self.indexer._clear_communities()
 
-    def retrieve_graph(self, query: str, config: RetrievalConfig, include_chunks: bool = False):
-        return self.retriever.retrieve_graph(query=query, config=config, include_chunks=include_chunks)
+    def retrieve_graph(
+        self, query: str, config: RetrievalConfig, include_chunks: bool = False
+    ):
+        return self.retriever.retrieve_graph(
+            query=query, config=config, include_chunks=include_chunks
+        )

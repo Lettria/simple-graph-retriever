@@ -20,9 +20,6 @@ logger = logging.getLogger("simple_graph_retriever")
 
 
 class Settings(BaseSettings):
-    # Selector: "neo4j" or "falkordb"
-    graph_db_type: str = "neo4j"
-
     # Neo4j Settings
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
@@ -33,7 +30,7 @@ class Settings(BaseSettings):
     falkordb_port: int = 6379
     falkordb_username: Optional[str] = None
     falkordb_password: Optional[str] = None
-    falkordb_graph_name: str = "my_graph"
+    falkordb_graph_name: str = "perseus_graph"
 
     # Qdrant & Embedder Settings
     qdrant_url: str = "http://localhost:6333"
