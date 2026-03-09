@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, LiteralString, Optional
 
 try:
     from neo4j import GraphDatabase as Neo4JDB
@@ -15,7 +15,7 @@ from .config import logger
 
 class GraphAdapter(ABC):
     @abstractmethod
-    def query(self, cypher: str, params: dict = None) -> List[Dict[str, Any]]:
+    def query(self, cypher: str, params: Optional[dict] = None) -> List[Dict[str, Any]]:
         """Executes a Cypher query and returns a list of dictionaries."""
         pass
 
@@ -39,12 +39,14 @@ class Neo4jAdapter(GraphAdapter):
         self.driver = Neo4JDB.driver(uri, auth=auth)
         self.driver.verify_connectivity()
 
-    def query(self, cypher: str, params: dict = None) -> List[Dict[str, Any]]:
+    def query(
+        self, cypher: LiteralString, params: Optional[dict] = None
+    ) -> List[Dict[str, Any]]:
         if params is None:
             params = {}
         with self.driver.session() as session:
             # Neo4j's .data() automatically converts results to dicts
-            return session.run(cypher, parameters=params).data()
+            return session.run(query=cypher, parameters=params).data()
 
     def close(self):
         self.driver.close()
@@ -71,7 +73,7 @@ class FalkorDBAdapter(GraphAdapter):
         # Ping to check connection
         self.client.connection.ping()
 
-    def query(self, cypher: str, params: dict = None) -> List[Dict[str, Any]]:
+    def query(self, cypher: str, params: Optional[dict] = None) -> List[Dict[str, Any]]:
         if params is None:
             params = {}
 
