@@ -87,7 +87,7 @@ class GraphIndexer:
         node_id_to_idx = {str(node["id"]): i for i, node in enumerate(nodes_data)}
         g = ig.Graph(directed=True)
         g.add_vertices(len(nodes_data))
-        g.vs["graph_id"] = [str(node["id"]) for node in nodes_data]
+        g.vs["graph_id"] = [node["id"] for node in nodes_data]
 
         edges = []
         for rel in rels_data:
