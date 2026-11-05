@@ -25,6 +25,7 @@ dependencies = [
     "pydantic-settings",
 ]
 
+
 [project.optional-dependencies]
 neo4j = ["neo4j"]
 falkordb = ["falkordb"]
