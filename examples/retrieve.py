@@ -1,9 +1,10 @@
 from simple_graph_retriever.client import GraphRetrievalClient
 from simple_graph_retriever.models import RetrievalConfig
+from tei_embedder import make_tei_embed_fn
 import json
 
 if __name__ == "__main__":
-    client = GraphRetrievalClient()
+    client = GraphRetrievalClient(embed_fn=make_tei_embed_fn())
     try:
         query = "What are the health benefits of regular exercise?"
 

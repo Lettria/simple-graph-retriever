@@ -5,7 +5,6 @@ from qdrant_client import QdrantClient
 from .models import CypherGenerationConfig, NLQueryResult
 from .db_adapter import GraphAdapter
 from .config import logger
-from .embedding import embed_text
 
 FENCE_LINE_RE = re.compile(r"^\s*```[a-zA-Z]*\s*$", re.MULTILINE)
 LIMIT_RE = re.compile(r"\bLIMIT\s+\d+\b", re.IGNORECASE)
@@ -17,13 +16,13 @@ class CypherGenerator:
         self,
         db_adapter: GraphAdapter,
         qdrant_url: str,
-        embedder_url: str,
+        embed_fn: Callable[[List[str]], List[List[float]]],
         qdrant_api_key: Optional[str] = None,
         schema_collection: str = "schema",
     ):
         self.db = db_adapter
         self.qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        self.embedder_url = embedder_url
+        self.embed_fn = embed_fn
         self.schema_collection = schema_collection
 
     def _retrieve_schema_context(self, query_embedding: list[float], top_k: int) -> str:
@@ -94,7 +93,7 @@ Cypher query:"""
         mode: Literal["seed_nodes", "freeform"] = "freeform",
     ) -> List[str]:
         config = config or CypherGenerationConfig()
-        query_embedding = embed_text(self.embedder_url, query)
+        query_embedding = self.embed_fn([query])[0]
         schema_context = self._retrieve_schema_context(
             query_embedding, config.top_k_schema
         )

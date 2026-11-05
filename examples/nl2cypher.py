@@ -1,5 +1,6 @@
 from simple_graph_retriever.client import GraphRetrievalClient
 from simple_graph_retriever.models import RetrievalConfig
+from tei_embedder import make_tei_embed_fn
 
 # Plug in any LLM provider here (Gemini, OpenAI, a local model, ...).
 # The SDK only needs a callable that takes the assembled prompt string
@@ -23,7 +24,7 @@ def stub_llm_fn(prompt: str) -> str:
 if __name__ == "__main__":
     # Passing llm_fn here also activates NL2Cypher by default inside
     # client.retrieve_graph() (RetrievalConfig.use_nl2cypher=True).
-    client = GraphRetrievalClient(llm_fn=stub_llm_fn)
+    client = GraphRetrievalClient(embed_fn=make_tei_embed_fn(), llm_fn=stub_llm_fn)
     try:
         # discover_schema() already ran as part of client.index(); if you
         # haven't indexed yet, run examples/index.py first.

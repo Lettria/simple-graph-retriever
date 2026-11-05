@@ -70,8 +70,7 @@ The SDK is configured via environment variables, which are loaded from a `.env` 
 | `QDRANT_CHUNKS_COLLECTION`      | `chunks`                | The name of the collection for storing graph chunks.                                              |
 | `QDRANT_COMMUNITIES_COLLECTION` | `communities`           | The name of the collection for storing community summaries.                                       |
 | `QDRANT_SCHEMA_COLLECTION`      | `schema`                | The name of the collection for storing discovered graph schema elements (for NL-to-Cypher).        |
-| `EMBEDDER_URL`                  | `http://localhost:8080` | The URL of the text embedding service. It must accept a POST request with `{"inputs": ["text"]}`. |
-| `VECTOR_SIZE`                   | `384`                   | The dimension of the vectors produced by your embedding model.                                    |
+| `VECTOR_SIZE`                   | `384`                   | The dimension of the vectors produced by your embedding model — must match what `embed_fn` returns.|
 | `LOGLEVEL`                      | `INFO`                  | The logging level for the SDK (`DEBUG`, `INFO`, `WARNING`, `ERROR`).                              |
 
 ### Neo4j Specific Configuration
@@ -104,7 +103,6 @@ NEO4J_USER="neo4j"
 NEO4J_PASSWORD="your_secure_password"
 
 QDRANT_URL="http://localhost:6333"
-EMBEDDER_URL="http://localhost:8080/embed"
 ```
 
 **Option B: Using FalkorDB**
@@ -115,7 +113,6 @@ FALKORDB_HOST="localhost"
 FALKORDB_PORT="6379"
 
 QDRANT_URL="http://localhost:6333"
-EMBEDDER_URL="http://localhost:8080/embed"
 ```
 
 ## 3. Usage
@@ -124,11 +121,25 @@ EMBEDDER_URL="http://localhost:8080/embed"
 
 The main entry point is the `GraphRetrievalClient`. It automatically loads settings from your `.env` file and initializes the appropriate database driver (Neo4j or FalkorDB) based on your configuration.
 
+The SDK doesn't bundle an embedding provider either: you supply `embed_fn`, a callback that takes a list of strings and returns a list of vectors (same order/length), so you can plug in Azure OpenAI, OpenAI, a local model, TEI, etc. — same pattern as `llm_fn` for NL2Cypher.
+
 ```python
-from graph_retrieval_sdk.client import GraphRetrievalClient
+from simple_graph_retriever.client import GraphRetrievalClient
+from openai import AzureOpenAI
+
+azure_client = AzureOpenAI(
+    azure_endpoint="https://<your-resource>.openai.azure.com",
+    api_key="...",
+    api_version="2024-02-01",
+)
+
+def embed_fn(texts: list[str]) -> list[list[float]]:
+    resp = azure_client.embeddings.create(input=texts, model="text-embedding-3-small")
+    return [d.embedding for d in resp.data]
 
 # Initialize the client (backend determined by env vars)
-client = GraphRetrievalClient()
+# VECTOR_SIZE must match embed_fn's output dimension (1536 for text-embedding-3-small).
+client = GraphRetrievalClient(embed_fn=embed_fn)
 ```
 
 ### Indexing the Graph
@@ -218,7 +229,7 @@ def llm_fn(prompt: str) -> str:
         model="gemini-3-flash-preview", contents=prompt
     ).text
 
-client = GraphRetrievalClient(llm_fn=llm_fn)
+client = GraphRetrievalClient(embed_fn=embed_fn, llm_fn=llm_fn)
 ```
 
 **It's on by default inside `retrieve_graph()`.** With an `llm_fn` configured, every `retrieve_graph()` call also asks the LLM to find nodes matching the question directly (via the discovered schema), and merges those into the same subgraph as the vector-search results — no separate call needed. The generated Cypher is logged at `INFO` level. If no `llm_fn` is configured, this step is skipped (with a warning) and behavior is unchanged from before this feature existed.

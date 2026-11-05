@@ -2,13 +2,14 @@ import sys
 import os
 
 from simple_graph_retriever.client import GraphRetrievalClient
+from tei_embedder import make_tei_embed_fn
 
 if __name__ == "__main__":
     print("Starting graph indexing example...")
     client = None
     try:
         # Initialize the client (settings loaded from .env or defaults)
-        client = GraphRetrievalClient()
+        client = GraphRetrievalClient(embed_fn=make_tei_embed_fn())
 
         # Run the full indexing pipeline
         print(

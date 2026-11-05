@@ -1,9 +1,8 @@
 import json
 import uuid
-from typing import List, Optional
+from typing import Callable, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Distance, VectorParams
-import requests
 import igraph as ig
 import leidenalg as la
 from .config import logger
@@ -15,7 +14,7 @@ class GraphIndexer:
         self,
         db_adapter: GraphAdapter,  # Changed from uri/auth to adapter
         qdrant_url,
-        embedder_url,
+        embed_fn: Callable[[List[str]], List[List[float]]],
         qdrant_api_key: Optional[str] = None,
         vector_size=384,
         chunks_collection: str = "chunks",
@@ -24,7 +23,7 @@ class GraphIndexer:
     ):
         self.db = db_adapter
         self.qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        self.embedder_url = embedder_url
+        self.embed_fn = embed_fn
         self.vector_batch_size = 100
         self.vector_size = vector_size
         self.chunks_collection = chunks_collection
@@ -252,22 +251,8 @@ class GraphIndexer:
         )
         logger.info("✅ Materialized :Community nodes.")
 
-    # embed_batch method remains the same...
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        # ... (same as original) ...
-        embeddings = []
-        for text in texts:
-            truncated_text = text[:500]
-            try:
-                resp = requests.post(
-                    self.embedder_url, json={"inputs": [truncated_text]}, timeout=30
-                )
-                resp.raise_for_status()
-                embeddings.extend(resp.json())
-            except Exception as e:
-                logger.error(f"Embedding error: {e}")
-                embeddings.append([])
-        return embeddings
+        return self.embed_fn(texts)
 
     def create_chunks(self):
         logger.info("2️⃣  Creating GraphChunks...")

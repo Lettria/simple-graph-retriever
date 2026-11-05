@@ -7,3 +7,7 @@ examples/save_neo4j
 docker-compose.yaml
 *.json
 examples/**.md
+__pycache__/
+*.pyc
+.venv/
+uv.lock

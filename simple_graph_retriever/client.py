@@ -1,4 +1,4 @@
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from .models import CypherGenerationConfig, NLQueryResult, RetrievalConfig
 from .indexer import GraphIndexer
 from .retriever import GraphRetriever
@@ -10,6 +10,7 @@ from .db_adapter import Neo4jAdapter, FalkorDBAdapter, GraphAdapter
 class GraphRetrievalClient:
     def __init__(
         self,
+        embed_fn: Callable[[List[str]], List[List[float]]],
         # Neo4j
         neo4j_uri: Optional[str] = None,
         neo4j_auth: Optional[Tuple[str, str]] = None,
@@ -23,7 +24,6 @@ class GraphRetrievalClient:
         qdrant_chunks_collection: Optional[str] = None,
         qdrant_communities_collection: Optional[str] = None,
         qdrant_schema_collection: Optional[str] = None,
-        embedder_url: Optional[str] = None,
         vector_size: Optional[int] = None,
         llm_fn: Optional[Callable[[str], str]] = None,
     ):
@@ -63,14 +63,13 @@ class GraphRetrievalClient:
         qdrant_schema_collection = (
             qdrant_schema_collection or settings.qdrant_schema_collection
         )
-        embedder_url = embedder_url or settings.embedder_url
         vector_size = vector_size or settings.vector_size
 
         # 3. Inject Adapter into Indexer and Retriever
         self._indexer = GraphIndexer(
             db_adapter=self.db_adapter,
             qdrant_url=qdrant_url,
-            embedder_url=embedder_url,
+            embed_fn=embed_fn,
             qdrant_api_key=qdrant_api_key,
             vector_size=vector_size,
             chunks_collection=qdrant_chunks_collection,
@@ -80,14 +79,14 @@ class GraphRetrievalClient:
         self._cypher_generator = CypherGenerator(
             db_adapter=self.db_adapter,
             qdrant_url=qdrant_url,
-            embedder_url=embedder_url,
+            embed_fn=embed_fn,
             qdrant_api_key=qdrant_api_key,
             schema_collection=qdrant_schema_collection,
         )
         self._retriever = GraphRetriever(
             db_adapter=self.db_adapter,
             qdrant_url=qdrant_url,
-            embedder_url=embedder_url,
+            embed_fn=embed_fn,
             qdrant_api_key=qdrant_api_key,
             chunks_collection=qdrant_chunks_collection,
             communities_collection=qdrant_communities_collection,

@@ -4,7 +4,6 @@ from qdrant_client.http.models import Filter, FieldCondition, MatchAny
 from .models import RetrievalConfig, RetrievalResult
 from .config import logger
 from .db_adapter import GraphAdapter
-from .embedding import embed_text
 from .nl2cypher import CypherGenerator
 
 
@@ -13,7 +12,7 @@ class GraphRetriever:
         self,
         db_adapter: GraphAdapter,
         qdrant_url,
-        embedder_url,
+        embed_fn: Callable[[List[str]], List[List[float]]],
         qdrant_api_key: Optional[str] = None,
         chunks_collection: str = "chunks",
         communities_collection: str = "communities",
@@ -23,17 +22,14 @@ class GraphRetriever:
         self.db = db_adapter
         self.qdrant_client = QdrantClient(
             url=qdrant_url, api_key=qdrant_api_key)
-        self.embedder_url = embedder_url
+        self.embed_fn = embed_fn
         self.chunks_collection = chunks_collection
         self.communities_collection = communities_collection
         self.cypher_generator = cypher_generator
         self.llm_fn = llm_fn
 
     def embed(self, text: str) -> list[float]:
-        """
-        Embeds a single string using the TEI embedder.
-        """
-        return embed_text(self.embedder_url, text)
+        return self.embed_fn([text])[0]
 
     def search_qdrant(self, collection, vector, limit, filters=None, score_threshold=None, score_drop_off_pct=None):
         try:
