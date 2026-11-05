@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Distance, VectorParams
@@ -19,6 +20,7 @@ class GraphIndexer:
         vector_size=384,
         chunks_collection: str = "chunks",
         communities_collection: str = "communities",
+        schema_collection: str = "schema",
     ):
         self.db = db_adapter
         self.qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
@@ -27,6 +29,7 @@ class GraphIndexer:
         self.vector_size = vector_size
         self.chunks_collection = chunks_collection
         self.communities_collection = communities_collection
+        self.schema_collection = schema_collection
         self._ensure_qdrant_collections_exist()
 
     def close_qdrant(self):
@@ -61,6 +64,112 @@ class GraphIndexer:
         self.db.query(
             "MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id"
         )
+
+    def _clear_schema(self):
+        logger.info("   Wiping schema discovery data...")
+        self.qdrant.recreate_collection(
+            collection_name=self.schema_collection,
+            vectors_config=VectorParams(
+                size=self.vector_size, distance=Distance.COSINE
+            ),
+        )
+
+    def discover_schema(self):
+        logger.info("0️⃣  Discovering Graph Schema...")
+        self._clear_schema()
+
+        label_query = """
+        MATCH (n)
+        WHERE NOT n:GraphChunk AND NOT n:Community
+        WITH labels(n)[0] AS label, n
+        WITH label, collect(n) AS nodes
+        RETURN label, size(nodes) AS node_count,
+               [k IN keys(nodes[0]) WHERE k <> 'uuid' AND k <> 'community_id'] AS property_keys,
+               [x IN nodes[0..3] | properties(x)] AS samples
+        """
+        rel_query = """
+        MATCH (a)-[r]->(b)
+        WHERE NOT a:GraphChunk AND NOT a:Community AND NOT b:GraphChunk AND NOT b:Community
+        WITH labels(a)[0] AS from_label, type(r) AS rel_type, labels(b)[0] AS to_label, r
+        WITH from_label, rel_type, to_label, collect(r) AS rels
+        RETURN from_label, rel_type, to_label, size(rels) AS rel_count,
+               [k IN keys(rels[0])] AS property_keys
+        """
+
+        labels_data = self.db.query(label_query)
+        rels_data = self.db.query(rel_query)
+        logger.info(
+            f"   Discovered {len(labels_data)} node labels and {len(rels_data)} relationship patterns."
+        )
+
+        texts = []
+        payloads = []
+
+        for row in labels_data:
+            property_keys = row.get("property_keys") or []
+            samples = row.get("samples") or []
+            prop_lines = []
+            for key in property_keys:
+                example = next(
+                    (s[key] for s in samples if key in s and s[key] is not None), None
+                )
+                if example is not None:
+                    prop_lines.append(f"{key} (e.g. {json.dumps(example)})")
+                else:
+                    prop_lines.append(key)
+
+            text = (
+                f"NodeLabel: {row['label']}\n"
+                f"Count: {row['node_count']}\n"
+                f"Properties: {', '.join(prop_lines) if prop_lines else 'none'}"
+            )
+            texts.append(text)
+            payloads.append(
+                {
+                    "type": "node_label",
+                    "label": row["label"],
+                    "node_count": row["node_count"],
+                    "property_keys": property_keys,
+                    "text": text,
+                }
+            )
+
+        for row in rels_data:
+            property_keys = row.get("property_keys") or []
+            text = (
+                f"Relationship: ({row['from_label']})-[:{row['rel_type']}]->({row['to_label']})\n"
+                f"Count: {row['rel_count']}\n"
+                f"Properties: {', '.join(property_keys) if property_keys else 'none'}"
+            )
+            texts.append(text)
+            payloads.append(
+                {
+                    "type": "relationship",
+                    "rel_type": row["rel_type"],
+                    "from_label": row["from_label"],
+                    "to_label": row["to_label"],
+                    "rel_count": row["rel_count"],
+                    "property_keys": property_keys,
+                    "text": text,
+                }
+            )
+
+        if not texts:
+            logger.warning("   No schema elements discovered; skipping indexing.")
+            return
+
+        vectors = self.embed_batch(texts)
+        points = []
+        for vector, payload in zip(vectors, payloads):
+            if not vector:
+                continue
+            points.append(
+                PointStruct(id=str(uuid.uuid4()), vector=vector, payload=payload)
+            )
+
+        if points:
+            self.qdrant.upsert(collection_name=self.schema_collection, points=points)
+        logger.info(f"✅ Indexed {len(points)} schema elements.")
 
     def run_community_detection(self):
         logger.info("1️⃣  Refreshing Community Structure...")

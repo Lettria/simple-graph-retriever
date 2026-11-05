@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     qdrant_api_key: Optional[str] = None
     qdrant_chunks_collection: str = "chunks"
     qdrant_communities_collection: str = "communities"
+    qdrant_schema_collection: str = "schema"
     embedder_url: str = "http://localhost:8080"
     vector_size: int = 384
     loglevel: str = "WARNING"

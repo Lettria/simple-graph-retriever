@@ -1,7 +1,8 @@
-from typing import Optional, Tuple
-from .models import RetrievalConfig
+from typing import Callable, Optional, Tuple
+from .models import CypherGenerationConfig, NLQueryResult, RetrievalConfig
 from .indexer import GraphIndexer
 from .retriever import GraphRetriever
+from .nl2cypher import CypherGenerator
 from .config import settings, logger
 from .db_adapter import Neo4jAdapter, FalkorDBAdapter, GraphAdapter
 
@@ -21,9 +22,12 @@ class GraphRetrievalClient:
         qdrant_api_key: Optional[str] = None,
         qdrant_chunks_collection: Optional[str] = None,
         qdrant_communities_collection: Optional[str] = None,
+        qdrant_schema_collection: Optional[str] = None,
         embedder_url: Optional[str] = None,
         vector_size: Optional[int] = None,
+        llm_fn: Optional[Callable[[str], str]] = None,
     ):
+        self.llm_fn = llm_fn
         # 1. Initialize Database Adapter
         self.db_adapter: GraphAdapter
 
@@ -56,6 +60,9 @@ class GraphRetrievalClient:
         qdrant_communities_collection = (
             qdrant_communities_collection or settings.qdrant_communities_collection
         )
+        qdrant_schema_collection = (
+            qdrant_schema_collection or settings.qdrant_schema_collection
+        )
         embedder_url = embedder_url or settings.embedder_url
         vector_size = vector_size or settings.vector_size
 
@@ -68,6 +75,14 @@ class GraphRetrievalClient:
             vector_size=vector_size,
             chunks_collection=qdrant_chunks_collection,
             communities_collection=qdrant_communities_collection,
+            schema_collection=qdrant_schema_collection,
+        )
+        self._cypher_generator = CypherGenerator(
+            db_adapter=self.db_adapter,
+            qdrant_url=qdrant_url,
+            embedder_url=embedder_url,
+            qdrant_api_key=qdrant_api_key,
+            schema_collection=qdrant_schema_collection,
         )
         self._retriever = GraphRetriever(
             db_adapter=self.db_adapter,
@@ -76,6 +91,8 @@ class GraphRetrievalClient:
             qdrant_api_key=qdrant_api_key,
             chunks_collection=qdrant_chunks_collection,
             communities_collection=qdrant_communities_collection,
+            cypher_generator=self._cypher_generator,
+            llm_fn=llm_fn,
         )
 
     @property
@@ -86,18 +103,24 @@ class GraphRetrievalClient:
     def retriever(self) -> GraphRetriever:
         return self._retriever
 
+    @property
+    def cypher_generator(self) -> CypherGenerator:
+        return self._cypher_generator
+
     def close(self):
         self.db_adapter.close()
         self._indexer.close_qdrant()
         # self._retriever.close() # Retriever doesn't hold separate connection now
 
     def index(self):
+        self.indexer.discover_schema()
         self.indexer.run_community_detection()
         self.indexer.create_chunks()
         self.indexer.index_chunks()
         self.indexer.index_communities()
 
     def clear_index(self):
+        self.indexer._clear_schema()
         self.indexer._clear_graph_chunks()
         self.indexer._clear_communities()
 
@@ -106,4 +129,21 @@ class GraphRetrievalClient:
     ):
         return self.retriever.retrieve_graph(
             query=query, config=config, include_chunks=include_chunks
+        )
+
+    def query_natural_language(
+        self,
+        query: str,
+        llm_fn: Optional[Callable[[str], str]] = None,
+        config: Optional[CypherGenerationConfig] = None,
+        execute: bool = True,
+    ) -> NLQueryResult:
+        llm_fn = llm_fn or self.llm_fn
+        if llm_fn is None:
+            raise ValueError(
+                "No llm_fn configured. Pass one to query_natural_language() "
+                "or to GraphRetrievalClient(llm_fn=...)."
+            )
+        return self.cypher_generator.query(
+            query=query, llm_fn=llm_fn, config=config, execute=execute
         )

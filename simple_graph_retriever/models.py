@@ -1,5 +1,16 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
+
+
+class CypherGenerationConfig(BaseModel):
+    top_k_schema: int = 10
+    max_queries: int = 3
+    result_limit: int = 50
+
+
+class NLQueryResult(BaseModel):
+    cypher: List[str]
+    results: List[List[Dict[str, Any]]]  # results[i] came from cypher[i]
 
 
 class RetrievalConfig(BaseModel):
@@ -16,6 +27,9 @@ class RetrievalConfig(BaseModel):
     allowed_rel_types: Optional[List[str]] = None
     denied_rel_types: Optional[List[str]] = None
     include_scores: bool = False
+    use_nl2cypher: bool = True
+    nl2cypher_mode: Literal["seed_nodes", "freeform"] = "seed_nodes"
+    nl2cypher_config: Optional[CypherGenerationConfig] = None
 
 
 class RetrievalNode(BaseModel):
@@ -47,6 +61,8 @@ class RetrievalRelationship(BaseModel):
 class RetrievalResult(BaseModel):
     nodes: List[RetrievalNode]
     relationships: List[RetrievalRelationship]
+    generated_cypher: List[str] = []
+    cypher_results: List[List[Dict[str, Any]]] = []  # cypher_results[i] came from generated_cypher[i]
 
     def __iter__(self):
         return iter(self.model_dump().items())

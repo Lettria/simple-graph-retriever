@@ -1,10 +1,11 @@
-from typing import List, Optional
-import requests
+from typing import Callable, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchAny
 from .models import RetrievalConfig, RetrievalResult
 from .config import logger
 from .db_adapter import GraphAdapter
+from .embedding import embed_text
+from .nl2cypher import CypherGenerator
 
 
 class GraphRetriever:
@@ -16,6 +17,8 @@ class GraphRetriever:
         qdrant_api_key: Optional[str] = None,
         chunks_collection: str = "chunks",
         communities_collection: str = "communities",
+        cypher_generator: Optional[CypherGenerator] = None,
+        llm_fn: Optional[Callable[[str], str]] = None,
     ):
         self.db = db_adapter
         self.qdrant_client = QdrantClient(
@@ -23,19 +26,14 @@ class GraphRetriever:
         self.embedder_url = embedder_url
         self.chunks_collection = chunks_collection
         self.communities_collection = communities_collection
+        self.cypher_generator = cypher_generator
+        self.llm_fn = llm_fn
 
     def embed(self, text: str) -> list[float]:
         """
         Embeds a single string using the TEI embedder.
         """
-        try:
-            resp = requests.post(self.embedder_url, json={
-                                 "inputs": text}, timeout=5)
-            resp.raise_for_status()
-            return resp.json()[0]
-        except Exception as e:
-            logger.error(f"Embedding failed: {e}")
-            return []
+        return embed_text(self.embedder_url, text)
 
     def search_qdrant(self, collection, vector, limit, filters=None, score_threshold=None, score_drop_off_pct=None):
         try:
@@ -68,7 +66,12 @@ class GraphRetriever:
             return []
         results = self.search_qdrant(self.communities_collection, query_embedding, config.max_communities,
                                      score_threshold=config.community_score_threshold, score_drop_off_pct=config.community_score_drop_off_pct)
-        return [{"community_id": r.payload["community_id"], "score": r.score} for r in results]
+        community_results = [{"community_id": r.payload["community_id"], "score": r.score} for r in results]
+        logger.info(
+            f"Vector search: {len(community_results)} matching communities "
+            f"(community_ids={[c['community_id'] for c in community_results]})"
+        )
+        return community_results
 
     def retrieve_chunks(self, query_embedding, community_results: list, config: RetrievalConfig):
         if not config.use_chunks:
@@ -81,7 +84,12 @@ class GraphRetriever:
 
         results = self.search_qdrant(self.chunks_collection, query_embedding, config.max_chunks, filters=filters,
                                      score_threshold=config.chunk_score_threshold, score_drop_off_pct=config.chunk_score_drop_off_pct)
-        return [{"center_node_id": r.payload["center_node_id"], "score": r.score} for r in results]
+        chunk_results = [{"center_node_id": r.payload["center_node_id"], "score": r.score} for r in results]
+        logger.info(
+            f"Vector search: {len(chunk_results)} matching chunks "
+            f"({len({c['center_node_id'] for c in chunk_results})} distinct center nodes)"
+        )
+        return chunk_results
 
     def retrieve_nodes_from_communities(self, community_ids: list, community_expansion_limit: int):
         id_fn = self.db.id_function
@@ -91,9 +99,13 @@ class GraphRetriever:
             RETURN toString({id_fn}(n)) as id
             LIMIT $limit
         """
-        result = self.db.query(
-            query, params={'cids': community_ids, 'limit': community_expansion_limit})
-        return [record["id"] for record in result]
+        params = {'cids': community_ids, 'limit': community_expansion_limit}
+        result = self.db.query(query, params=params)
+        seed_ids = [record["id"] for record in result]
+        logger.info(
+            f"Community expansion: {len(seed_ids)} additional seed nodes from {len(community_ids)} communities"
+        )
+        return seed_ids
 
     def fetch_subgraph(
         self,
@@ -102,7 +114,6 @@ class GraphRetriever:
         allowed_rel_types: Optional[List[str]] = None,
         denied_rel_types: Optional[List[str]] = None,
     ):
-        print("Fetching subgraph...")
         id_fn = self.db.id_function
 
         rel_type_filter_clauses = []
@@ -164,11 +175,37 @@ class GraphRetriever:
             center_node_ids += self.retrieve_nodes_from_communities(
                 community_ids, config.community_expansion_limit)
 
-        if not center_node_ids:
+        generated_cypher = []
+        cypher_results = []
+        if config.use_nl2cypher and self.llm_fn is not None:
+            nl_result = self.cypher_generator.query(
+                query, self.llm_fn, config.nl2cypher_config,
+                execute=True, mode=config.nl2cypher_mode,
+            )
+            generated_cypher = nl_result.cypher
+            if config.nl2cypher_mode == "seed_nodes":
+                for rows in nl_result.results:
+                    center_node_ids += [
+                        str(r["id"]) for r in rows if r.get("id") is not None
+                    ]
+            else:
+                cypher_results = nl_result.results
+        elif config.use_nl2cypher:
+            logger.warning(
+                "use_nl2cypher is enabled but no llm_fn was configured on the client; skipping NL2Cypher."
+            )
+
+        if not center_node_ids and not cypher_results:
             return None
 
-        subgraph = self.fetch_subgraph(
-            center_node_ids, config.max_hops, config.allowed_rel_types, config.denied_rel_types)
+        logger.info(
+            f"Expanding subgraph from {len(center_node_ids)} seed nodes (max_hops={config.max_hops})"
+        )
+        subgraph = (
+            self.fetch_subgraph(
+                center_node_ids, config.max_hops, config.allowed_rel_types, config.denied_rel_types)
+            if center_node_ids else []
+        )
 
         if subgraph and subgraph[0].get("nodes"):
             chunk_scores = {c["center_node_id"]: c["score"]
@@ -199,6 +236,17 @@ class GraphRetriever:
                 node.pop("community_score", None)
 
         if not subgraph:
-            return RetrievalResult(nodes=[], relationships=[])
+            logger.info("Retrieval complete: 0 nodes, 0 relationships")
+            return RetrievalResult(
+                nodes=[], relationships=[],
+                generated_cypher=generated_cypher, cypher_results=cypher_results,
+            )
 
-        return RetrievalResult(nodes=subgraph[0]["nodes"], relationships=subgraph[0]["relationships"])
+        logger.info(
+            f"Retrieval complete: {len(subgraph[0]['nodes'])} nodes, "
+            f"{len(subgraph[0]['relationships'])} relationships"
+        )
+        return RetrievalResult(
+            nodes=subgraph[0]["nodes"], relationships=subgraph[0]["relationships"],
+            generated_cypher=generated_cypher, cypher_results=cypher_results,
+        )

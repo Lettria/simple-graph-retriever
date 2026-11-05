@@ -27,6 +27,7 @@ This SDK handles the heavy lifting of graph processing, including:
     - [Retrieving a Subgraph](#retrieving-a-subgraph)
       - [Basic Retrieval](#basic-retrieval)
       - [Advanced Retrieval with Graph Expansion Control](#advanced-retrieval-with-graph-expansion-control)
+    - [Natural Language to Cypher](#natural-language-to-cypher)
   - [4. Project Structure](#4-project-structure)
   - [5. Contributing](#5-contributing)
   - [6. License](#6-license)
@@ -68,6 +69,7 @@ The SDK is configured via environment variables, which are loaded from a `.env` 
 | `QDRANT_API_KEY`                | `None`                  | Optional: The API key for authenticating with your Qdrant instance.                               |
 | `QDRANT_CHUNKS_COLLECTION`      | `chunks`                | The name of the collection for storing graph chunks.                                              |
 | `QDRANT_COMMUNITIES_COLLECTION` | `communities`           | The name of the collection for storing community summaries.                                       |
+| `QDRANT_SCHEMA_COLLECTION`      | `schema`                | The name of the collection for storing discovered graph schema elements (for NL-to-Cypher).        |
 | `EMBEDDER_URL`                  | `http://localhost:8080` | The URL of the text embedding service. It must accept a POST request with `{"inputs": ["text"]}`. |
 | `VECTOR_SIZE`                   | `384`                   | The dimension of the vectors produced by your embedding model.                                    |
 | `LOGLEVEL`                      | `INFO`                  | The logging level for the SDK (`DEBUG`, `INFO`, `WARNING`, `ERROR`).                              |
@@ -198,6 +200,59 @@ if subgraph:
 
 # Close the client connection when done
 client.close()
+```
+
+### Natural Language to Cypher
+
+`client.index()` also runs a schema discovery pass: it inspects the connected graph's node labels, relationship types, and properties, and indexes a short description of each into a dedicated `schema` Qdrant collection. This lets the LLM see only the relevant slice of the schema, even on large graphs.
+
+The SDK doesn't bundle an LLM client; you provide a callback (`llm_fn`) that takes the assembled prompt and returns the model's raw text response, so you can plug in Gemini, OpenAI, a local model, etc. Pass it once, to the client:
+
+```python
+from google import genai
+
+genai_client = genai.Client()
+
+def llm_fn(prompt: str) -> str:
+    return genai_client.models.generate_content(
+        model="gemini-3-flash-preview", contents=prompt
+    ).text
+
+client = GraphRetrievalClient(llm_fn=llm_fn)
+```
+
+**It's on by default inside `retrieve_graph()`.** With an `llm_fn` configured, every `retrieve_graph()` call also asks the LLM to find nodes matching the question directly (via the discovered schema), and merges those into the same subgraph as the vector-search results — no separate call needed. The generated Cypher is logged at `INFO` level. If no `llm_fn` is configured, this step is skipped (with a warning) and behavior is unchanged from before this feature existed.
+
+This is controlled by two `RetrievalConfig` fields:
+
+```python
+config = RetrievalConfig(
+    use_nl2cypher=True,       # default: True: set False to disable entirely
+    nl2cypher_mode="seed_nodes",  # default: "seed_nodes" | "freeform"
+)
+```
+
+- `"seed_nodes"` (default): the LLM is constrained to return only matching node identifiers. These are merged with the vector-search seeds and expanded through the normal hop-traversal — the result stays a single, unified `nodes`/`relationships` subgraph.
+- `"freeform"`: the LLM can write any Cypher (aggregates, specific properties, etc.). Its raw rows are returned separately in `result.cypher_results`, alongside (not merged into) `result.nodes`/`result.relationships`.
+
+The LLM may answer with **more than one** Cypher query (e.g. if the question has several distinct aspects), or with none at all if the retrieved schema genuinely isn't relevant to the question. So `result.generated_cypher` is a `List[str]` and, in `"freeform"` mode, `result.cypher_results` is a `List[List[Dict]]` — `cypher_results[i]` holds the rows for `generated_cypher[i]`. Both can be empty lists. This is tunable via `CypherGenerationConfig`:
+
+```python
+config = RetrievalConfig(
+    nl2cypher_config=CypherGenerationConfig(
+        max_queries=3,     # default: at most this many queries per call
+        result_limit=50,   # default: a LIMIT is enforced on every query, even if the LLM forgets one
+    ),
+)
+```
+
+You can also call it directly, bypassing `retrieve_graph()` entirely:
+
+```python
+result = client.query_natural_language("Who was the emperor of Rome?")  # uses the client's llm_fn
+
+print(result.cypher)   # List[str] — the generated Cypher queries
+print(result.results)  # List[List[Dict]] — results[i] came from cypher[i]
 ```
 
 ## 4. Project Structure
