@@ -124,3 +124,17 @@ class RetrievalResult(BaseModel):
                 lines.append("")  # empty line for spacing
 
         return "\n".join(lines)
+
+
+class RetrievalStepSubEvent(BaseModel):
+    title: str
+    output: str
+
+
+class RetrievalStepEvent(BaseModel):
+    key: str
+    title: str
+    output: Optional[str] = None
+    sub_events: List[RetrievalStepSubEvent] = []
+    data: Optional[Any] = None
+    result: Optional[RetrievalResult] = None

@@ -28,6 +28,7 @@ This SDK handles the heavy lifting of graph processing, including:
       - [Basic Retrieval](#basic-retrieval)
       - [Advanced Retrieval with Graph Expansion Control](#advanced-retrieval-with-graph-expansion-control)
     - [Natural Language to Cypher](#natural-language-to-cypher)
+    - [Streaming Retrieval Progress](#streaming-retrieval-progress)
   - [4. Project Structure](#4-project-structure)
   - [5. Contributing](#5-contributing)
   - [6. License](#6-license)
@@ -265,6 +266,22 @@ result = client.query_natural_language("Who was the emperor of Rome?")  # uses t
 print(result.cypher)   # List[str] — the generated Cypher queries
 print(result.results)  # List[List[Dict]] — results[i] came from cypher[i]
 ```
+
+### Streaming Retrieval Progress
+
+`client.iter_retrieve_graph(query, config)` runs the exact same pipeline as `retrieve_graph()`, but returns a generator of `RetrievalStepEvent` objects instead of only the final result — useful for showing live progress in a UI. Only phases that actually ran emit an event; the last event always has `key="done"` and carries the same result `retrieve_graph()` would have returned. Each event's `output` is a short human-readable summary, while `data` carries the step's raw structured output (e.g. the matched community/chunk records, the generated Cypher and its rows, or a sample of the expanded subgraph's nodes/relationships) for a UI that wants to show more than just the summary line.
+
+```python
+for event in client.iter_retrieve_graph(query, RetrievalConfig()):
+    print(f"[{event.key}] {event.title}: {event.output}")
+    print(f"    data: {event.data}")
+    for sub in event.sub_events:
+        print(f"    - {sub.title}: {sub.output}")
+    if event.key == "done":
+        result = event.result  # same RetrievalResult (or None) retrieve_graph() returns
+```
+
+See `examples/retrieve_stream.py` for a full runnable example, including the NL2Cypher `sub_events` case.
 
 ## 4. Project Structure
 

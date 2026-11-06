@@ -61,7 +61,7 @@ class GraphIndexer:
         logger.info("   Wiping community data from DB...")
         self.db.query("MATCH (c:Community) DETACH DELETE c")
         self.db.query(
-            "MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id"
+            "MATCH (n) WHERE n.community_id IS NOT NULL REMOVE n.community_id, n:_CommunityMember"
         )
 
     def _clear_schema(self):
@@ -231,14 +231,39 @@ class GraphIndexer:
                 # FalkorDB expects int for ID() check usually, but we cast toString earlier
                 # Reverting to simple WHERE ID(n) = int(...)
                 # But we stored string version.
-                query = f"MATCH (n) WHERE ID(n) = {graph_node_id} SET n.community_id = {community_id}"
+                query = f"MATCH (n) WHERE ID(n) = {graph_node_id} SET n.community_id = {community_id}, n:_CommunityMember"
             else:
-                query = f"MATCH (n) WHERE elementId(n) = '{graph_node_id}' SET n.community_id = {community_id}"
+                query = f"MATCH (n) WHERE elementId(n) = '{graph_node_id}' SET n.community_id = {community_id}, n:_CommunityMember"
 
             self.db.query(query)
             count += 1
             if count % 100 == 0:
                 print(f"Updates: {count}", end="\r")
+
+        # community_id has no common label to scope a schema index to on its own,
+        # so every node that gets a community_id is also tagged :_CommunityMember
+        # above, and the index is scoped to that label. Without this,
+        # retrieve_nodes_from_communities()'s `MATCH (n) WHERE n.community_id IN $cids`
+        # has to full-scan every node in the graph.
+        try:
+            # FalkorDB's Cypher dialect doesn't support "IF NOT EXISTS" on
+            # CREATE INDEX (it errors on parsing); Neo4j requires it to stay
+            # idempotent across re-indexing runs. FalkorDB itself no-ops
+            # (rather than erroring) when the index already exists, so the
+            # plain form is safe to re-run there.
+            if self.db.id_function == "ID":
+                self.db.query(
+                    "CREATE INDEX FOR (n:_CommunityMember) ON (n.community_id)"
+                )
+            else:
+                self.db.query(
+                    "CREATE INDEX IF NOT EXISTS FOR (n:_CommunityMember) ON (n.community_id)"
+                )
+            logger.info("✅ Ensured index on :_CommunityMember(community_id).")
+        except Exception as e:
+            logger.warning(
+                f"Could not create index on :_CommunityMember(community_id): {e}"
+            )
 
         # Materialize Community Nodes
         self.db.query(

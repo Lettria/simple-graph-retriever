@@ -130,6 +130,17 @@ class GraphRetrievalClient:
             query=query, config=config, include_chunks=include_chunks
         )
 
+    def iter_retrieve_graph(
+        self, query: str, config: RetrievalConfig, include_chunks: bool = False
+    ):
+        """
+        Same as retrieve_graph(), but returns a generator of RetrievalStepEvent
+        objects instead of only the final result. See GraphRetriever.iter_retrieve_graph().
+        """
+        return self.retriever.iter_retrieve_graph(
+            query=query, config=config, include_chunks=include_chunks
+        )
+
     def query_natural_language(
         self,
         query: str,

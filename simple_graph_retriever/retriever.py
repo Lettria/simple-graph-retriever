@@ -1,7 +1,7 @@
 from typing import Callable, List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchAny
-from .models import RetrievalConfig, RetrievalResult
+from .models import RetrievalConfig, RetrievalResult, RetrievalStepEvent, RetrievalStepSubEvent
 from .config import logger
 from .db_adapter import GraphAdapter
 from .nl2cypher import CypherGenerator
@@ -89,8 +89,11 @@ class GraphRetriever:
 
     def retrieve_nodes_from_communities(self, community_ids: list, community_expansion_limit: int):
         id_fn = self.db.id_function
+        # Scoped to :_CommunityMember (set by GraphIndexer.run_community_detection
+        # alongside community_id) so the planner can use the index on that label
+        # instead of a full node-store scan.
         query = f"""
-            MATCH (n)
+            MATCH (n:_CommunityMember)
             WHERE n.community_id IN $cids
             RETURN toString({id_fn}(n)) as id
             LIMIT $limit
@@ -147,6 +150,180 @@ class GraphRetriever:
 
         return self.db.query(query, params=params)
 
+    def iter_retrieve_graph(self, query: str, config: RetrievalConfig, include_chunks: bool = False):
+        """
+        Same retrieval pipeline as retrieve_graph(), yielding a RetrievalStepEvent
+        after each phase that actually ran, for live progress. The final event has
+        key="done" and its `result` is exactly what retrieve_graph() would return.
+
+        This is lazy (partial iteration = partial execution) and single-use, like
+        any generator. Mirrors retrieve_graph()'s control flow below it in this
+        file — keep both in sync if the retrieval algorithm changes.
+        """
+        query_embedding = self.embed(query)
+        if not query_embedding:
+            yield RetrievalStepEvent(
+                key="embed_query", title="Embedding query",
+                output="Failed to embed query; aborting retrieval.",
+            )
+            yield RetrievalStepEvent(key="done", title="Done", result=None)
+            return
+        yield RetrievalStepEvent(
+            key="embed_query", title="Embedding query",
+            output=f"Embedded query into a {len(query_embedding)}-dim vector.",
+            data={"dimensions": len(query_embedding)},
+        )
+
+        community_results = self.retrieve_communities(query_embedding, config)
+        community_scores = {c["community_id"]: c["score"]
+                            for c in community_results}
+
+        chunk_results = []
+        center_node_ids = []
+        if config.use_chunks:
+            chunk_results = self.retrieve_chunks(
+                query_embedding, community_results, config)
+            center_node_ids += [c["center_node_id"] for c in chunk_results]
+            yield RetrievalStepEvent(
+                key="chunks", title="Searching chunks",
+                output=(
+                    f"Found {len(chunk_results)} matching chunks across "
+                    f"{len({c['center_node_id'] for c in chunk_results})} distinct nodes."
+                ),
+                data={"results": chunk_results},
+            )
+        if config.use_communities:
+            community_ids = [c["community_id"] for c in community_results]
+            seed_ids = self.retrieve_nodes_from_communities(
+                community_ids, config.community_expansion_limit)
+            center_node_ids += seed_ids
+            yield RetrievalStepEvent(
+                key="communities", title="Searching communities",
+                output=(
+                    f"Found {len(community_results)} matching communities; "
+                    f"expanded to {len(seed_ids)} seed nodes."
+                ),
+                data={"communities": community_results, "seed_node_ids": seed_ids},
+            )
+
+        generated_cypher = []
+        cypher_results = []
+        if config.use_nl2cypher and self.llm_fn is not None:
+            nl_result = self.cypher_generator.query(
+                query, self.llm_fn, config.nl2cypher_config,
+                execute=True, mode=config.nl2cypher_mode,
+            )
+            generated_cypher = nl_result.cypher
+            if config.nl2cypher_mode == "seed_nodes":
+                for rows in nl_result.results:
+                    center_node_ids += [
+                        str(r["id"]) for r in rows if r.get("id") is not None
+                    ]
+            else:
+                cypher_results = nl_result.results
+            total_rows = sum(len(rows) for rows in nl_result.results)
+            yield RetrievalStepEvent(
+                key="nl2cypher", title="Generating Cypher",
+                output=(
+                    f"Generated {len(generated_cypher)} Cypher quer"
+                    f"{'y' if len(generated_cypher) == 1 else 'ies'}; "
+                    f"{total_rows} total rows returned."
+                ),
+                sub_events=[
+                    RetrievalStepSubEvent(
+                        title=f"Query {i + 1}",
+                        output=f"{cypher}\n-> {len(rows)} rows",
+                    )
+                    for i, (cypher, rows) in enumerate(zip(generated_cypher, nl_result.results))
+                ],
+                data={"generated_cypher": generated_cypher, "results": nl_result.results},
+            )
+        elif config.use_nl2cypher:
+            logger.warning(
+                "use_nl2cypher is enabled but no llm_fn was configured on the client; skipping NL2Cypher."
+            )
+
+        if not center_node_ids and not cypher_results:
+            yield RetrievalStepEvent(key="done", title="Done", result=None)
+            return
+
+        logger.info(
+            f"Expanding subgraph from {len(center_node_ids)} seed nodes (max_hops={config.max_hops})"
+        )
+        subgraph = (
+            self.fetch_subgraph(
+                center_node_ids, config.max_hops, config.allowed_rel_types, config.denied_rel_types)
+            if center_node_ids else []
+        )
+
+        if subgraph and subgraph[0].get("nodes"):
+            chunk_scores = {c["center_node_id"]: c["score"]
+                            for c in chunk_results}
+            for node in subgraph[0]["nodes"]:
+                node_id = node.get("element_id")
+                community_id = node.get("community_id")
+                if node_id in chunk_scores:
+                    node["chunk_score"] = chunk_scores[node_id]
+                if community_id in community_scores:
+                    node["community_score"] = community_scores[community_id]
+
+            subgraph[0]["nodes"] = sorted(
+                subgraph[0]["nodes"], key=lambda node: node.get("chunk_score", 0), reverse=True)
+
+        if not include_chunks and subgraph:
+            nodes_to_keep = [node for node in subgraph[0]
+                             ["nodes"] if "text" not in node]
+            node_ids_to_keep = {node["element_id"] for node in nodes_to_keep}
+            relationships_to_keep = [rel for rel in subgraph[0]["relationships"]
+                                     if rel["start_node_element_id"] in node_ids_to_keep and rel["end_node_element_id"] in node_ids_to_keep]
+            subgraph[0]["nodes"] = nodes_to_keep
+            subgraph[0]["relationships"] = relationships_to_keep
+
+        if not config.include_scores and subgraph:
+            for node in subgraph[0]["nodes"]:
+                node.pop("chunk_score", None)
+                node.pop("community_score", None)
+
+        if not subgraph:
+            logger.info("Retrieval complete: 0 nodes, 0 relationships")
+            result = RetrievalResult(
+                nodes=[], relationships=[],
+                generated_cypher=generated_cypher, cypher_results=cypher_results,
+            )
+            yield RetrievalStepEvent(
+                key="subgraph", title="Expanding subgraph",
+                output="Expanded to 0 nodes, 0 relationships.",
+                data={"node_count": 0, "relationship_count": 0, "nodes": [], "relationships": []},
+            )
+            yield RetrievalStepEvent(key="done", title="Done", output="Retrieval complete.", result=result)
+            return
+
+        logger.info(
+            f"Retrieval complete: {len(subgraph[0]['nodes'])} nodes, "
+            f"{len(subgraph[0]['relationships'])} relationships"
+        )
+        result = RetrievalResult(
+            nodes=subgraph[0]["nodes"], relationships=subgraph[0]["relationships"],
+            generated_cypher=generated_cypher, cypher_results=cypher_results,
+        )
+        yield RetrievalStepEvent(
+            key="subgraph", title="Expanding subgraph",
+            output=(
+                f"Expanded from {len(center_node_ids)} seed nodes (max_hops={config.max_hops}) "
+                f"to {len(result.nodes)} nodes, {len(result.relationships)} relationships."
+            ),
+            data={
+                "node_count": len(result.nodes),
+                "relationship_count": len(result.relationships),
+                # Capped so a large subgraph doesn't balloon this event; the
+                # full result is still available on the final "done" event.
+                "nodes": [n.model_dump() for n in result.nodes[:25]],
+                "relationships": [r.model_dump() for r in result.relationships[:25]],
+            },
+        )
+        yield RetrievalStepEvent(key="done", title="Done", output="Retrieval complete.", result=result)
+
+    # Mirrors iter_retrieve_graph() above — keep both in sync.
     # retrieve_graph logic remains mostly the same, standard python logic
     def retrieve_graph(self, query: str, config: RetrievalConfig, include_chunks: bool = False) -> RetrievalResult | None:
         """
