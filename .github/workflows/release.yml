@@ -22,7 +22,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install wheel setuptools build
-          pip install --upgrade twine
+          # twine's own dependency bounds don't force pkginfo to upgrade (pip's
+          # default "only-if-needed" strategy keeps an already-satisfying old
+          # pkginfo), but pkginfo is what actually hardcodes which
+          # Metadata-Version values it recognizes — and hatchling keeps bumping
+          # that version (2.4, then 2.5), so pkginfo must be upgraded explicitly
+          # alongside twine or "twine upload" fails with
+          # "InvalidDistribution: 'X.Y' is not a valid metadata version".
+          pip install --upgrade twine pkginfo
           npm install -g semantic-release semantic-release-pypi @semantic-release/github @semantic-release/git semantic-release-replace-plugin
       - name: Clean dist directory
         run: rm -rf dist/
