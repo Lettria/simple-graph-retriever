@@ -42,19 +42,19 @@ To install the SDK, clone this repository and use pip. You can choose which data
 **Install with Neo4j support:**
 
 ```bash
-pip install simple_graph_retriever[neo4j]==1.0.0-rc.25
+pip install simple_graph_retriever[neo4j]==1.0.0-rc.26
 ```
 
 **Install with FalkorDB support:**
 
 ```bash
-pip install simple_graph_retriever[falkordb]==1.0.0-rc.25
+pip install simple_graph_retriever[falkordb]==1.0.0-rc.26
 ```
 
 **Install with support for both:**
 
 ```bash
-pip install simple_graph_retriever[all]==1.0.0-rc.25
+pip install simple_graph_retriever[all]==1.0.0-rc.26
 ```
 
 ## 2. Configuration
