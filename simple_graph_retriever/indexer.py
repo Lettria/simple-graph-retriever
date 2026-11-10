@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 from typing import Callable, List, Optional
 from qdrant_client import QdrantClient
@@ -217,28 +218,23 @@ class GraphIndexer:
 
         logger.info("   Writing community IDs to DB...")
         batch_size = 1000
-        count = 0
+        id_check = "ID(n)" if self.db.id_function == "ID" else "elementId(n)"
+        updates = [
+            {"id": g.vs[i]["graph_id"], "community_id": community_id}
+            for i, community_id in enumerate(partition.membership)
+        ]
 
-        # We can't use transactions easily across adapters, so we run simple queries
-        # Or you can batch them in the adapter, but simple loop is fine for now
-        for i, community_id in enumerate(partition.membership):
-            graph_node_id = g.vs[i]["graph_id"]
-
-            # Handling ID matching: if it's FalkorDB (int ID), we need to handle the conversion
-            # In Cypher: ID(n) = 123. In Neo4j: elementId(n) = "4:..."
-            # Safest way: pass as parameter and let DB match
-            if self.db.id_function == "ID":
-                # FalkorDB expects int for ID() check usually, but we cast toString earlier
-                # Reverting to simple WHERE ID(n) = int(...)
-                # But we stored string version.
-                query = f"MATCH (n) WHERE ID(n) = {graph_node_id} SET n.community_id = {community_id}, n:_CommunityMember"
-            else:
-                query = f"MATCH (n) WHERE elementId(n) = '{graph_node_id}' SET n.community_id = {community_id}, n:_CommunityMember"
-
-            self.db.query(query)
-            count += 1
-            if count % 100 == 0:
-                print(f"Updates: {count}", end="\r")
+        for i in range(0, len(updates), batch_size):
+            batch = updates[i:i + batch_size]
+            self.db.query(
+                f"""
+                UNWIND $updates AS u
+                MATCH (n) WHERE {id_check} = u.id
+                SET n.community_id = u.community_id, n:_CommunityMember
+                """,
+                params={"updates": batch},
+            )
+            logger.info(f"   Updates: {min(i + batch_size, len(updates))}/{len(updates)}")
 
         # community_id has no common label to scope a schema index to on its own,
         # so every node that gets a community_id is also tagged :_CommunityMember
@@ -277,7 +273,11 @@ class GraphIndexer:
         logger.info("✅ Materialized :Community nodes.")
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return self.embed_fn(texts)
+        logger.info(f"   Embedding {len(texts)} texts...")
+        start = time.perf_counter()
+        vectors = self.embed_fn(texts)
+        logger.info(f"   Embedded {len(texts)} texts in {(time.perf_counter() - start) * 1000:.1f}ms.")
+        return vectors
 
     def create_chunks(self):
         logger.info("2️⃣  Creating GraphChunks...")
