@@ -301,6 +301,10 @@ class GraphIndexer:
             WITH n
             MATCH (n)-[r]-(m)
             WITH type(r) as rel_type, labels(m) as n_labels, m
+            // A fixed order: the same neighbourhood always gives the same
+            // chunk text (and the same 10 neighbours), so its embedding can
+            // be reused from one indexing to the next.
+            ORDER BY rel_type, head(labels(m)), coalesce(m.label, m.name, ""), coalesce(m.uuid, "")
             LIMIT 10
             RETURN collect(
                 rel_type + " -> " + head(labels(m)) + ":" + 
@@ -396,7 +400,7 @@ class GraphIndexer:
             
             OPTIONAL MATCH (n)-[r]-()
             WITH n, count(r) as degree
-            ORDER BY degree DESC LIMIT 5
+            ORDER BY degree DESC, coalesce(n.uuid, "") LIMIT 5
 
             WITH n, head(labels(n)) + ":" + coalesce(n.label, n.name, "Item") as summary
             RETURN collect(summary) as summaries
