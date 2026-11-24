@@ -6,8 +6,20 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, Distance, VectorParams
 import igraph as ig
 import leidenalg as la
+from .community_summary import (
+    DEFAULT_LIMITS,
+    SummarizeFn,
+    SummaryLimits,
+    fit_budget,
+    node_line,
+    summarize_communities,
+)
 from .config import logger
 from .db_adapter import GraphAdapter
+
+# Fixed so that the same graph always gives the same communities: their
+# summaries (and embeddings) can then be reused when nothing changed.
+COMMUNITY_SEED = 42
 
 
 class GraphIndexer:
@@ -21,8 +33,15 @@ class GraphIndexer:
         chunks_collection: str = "chunks",
         communities_collection: str = "communities",
         schema_collection: str = "schema",
+        summarize_fn: Optional[SummarizeFn] = None,
+        summary_limits: SummaryLimits = DEFAULT_LIMITS,
     ):
         self.db = db_adapter
+        # Writes a summary of each community from all its nodes (an LLM call
+        # per prompt). Without it, or when a call fails, a community's summary
+        # is the list of its key elements.
+        self.summarize_fn = summarize_fn
+        self.summary_limits = summary_limits
         self.qdrant = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.embed_fn = embed_fn
         self.vector_batch_size = 100
@@ -181,8 +200,12 @@ class GraphIndexer:
         logger.info("   Fetching graph data...")
         # Note: toString() handles FalkorDB integers vs Neo4j strings
         logger.info(f"Using ID function: {id_fn}(n)")
+        # A fixed order (the data's uuid, then the id), so that the same graph
+        # gives the same partition: see COMMUNITY_SEED.
         nodes_data = self.db.query(
-            f"MATCH (n) WHERE NOT n:GraphChunk AND NOT n:Community RETURN {id_fn}(n) as id"
+            f"MATCH (n) WHERE NOT n:GraphChunk AND NOT n:Community "
+            f"RETURN {id_fn}(n) as id, coalesce(n.uuid, '') as uuid "
+            f"ORDER BY uuid, id"
         )
         logger.info(f"Nodes fetched: {len(nodes_data)}")
         rels_data = self.db.query(
@@ -211,9 +234,12 @@ class GraphIndexer:
                 logger.warning(
                     f"Skipping edge with missing node: {source_id} -> {target_id}"
                 )
+        edges.sort()
         g.add_edges(edges)
         logger.info(f"   Running Leiden algorithm on {g.vcount()} nodes...")
-        partition = la.find_partition(g, la.ModularityVertexPartition)
+        partition = la.find_partition(
+            g, la.ModularityVertexPartition, seed=COMMUNITY_SEED
+        )
         logger.info(f"✅ Detected {len(partition)} communities.")
 
         logger.info("   Writing community IDs to DB...")
@@ -386,18 +412,19 @@ class GraphIndexer:
             self.db.query(mark_done_query, params={"ids": ids})
             logger.info(f"   Indexed {len(points)} chunks.")
 
-    def index_communities(self):
-        logger.info("4️⃣  Indexing Communities...")
-
-        # Corrected Query: Removed '#' comments and used '//' or no comments
-        query = """
+    # The communities not indexed yet, smallest first (so that, under the run's
+    # character budget, the largest communities are the ones cut down), with
+    # their key elements: the five best-connected nodes, which are a
+    # community's summary when no LLM wrote one.
+    _COMMUNITIES_QUERY = """
         MATCH (c:Community)
         WHERE c.indexed IS NULL
+        WITH c ORDER BY c.size, c.id LIMIT $batch_size
 
         CALL {
             WITH c
             MATCH (n) WHERE n.community_id = c.id AND NOT n:GraphChunk
-            
+
             OPTIONAL MATCH (n)-[r]-()
             WITH n, count(r) as degree
             ORDER BY degree DESC, coalesce(n.uuid, "") LIMIT 5
@@ -406,23 +433,84 @@ class GraphIndexer:
             RETURN collect(summary) as summaries
         }
 
-        WITH c, "Community ID: " + toString(c.id) + "\nKey Elements:\n" + 
-             reduce(s="", x IN summaries | s + x + "\n") as comm_text
-        
-        RETURN c.id as id, comm_text as text
-        LIMIT $batch_size
-        """
+        WITH c, "Key Elements:\n" +
+             reduce(s="", x IN summaries | s + x + "\n") as elements
+        RETURN c.id as id, elements
+    """
 
-        mark_done = "MATCH (c:Community {id: $id}) SET c.indexed = true, c.text = $text"
+    # Every node of a community with its outgoing relationships (each
+    # relationship once), best-connected first, in a fixed order.
+    _COMMUNITY_NODES_QUERY = """
+        MATCH (n) WHERE n.community_id = $cid AND NOT n:GraphChunk AND NOT n:Community
+        OPTIONAL MATCH (n)-[r]->(m) WHERE NOT m:GraphChunk AND NOT m:Community
+        WITH n, collect(CASE WHEN r IS NULL THEN NULL ELSE
+                 {type: type(r), target: coalesce(m.label, m.name, "Item")} END) AS rels
+        RETURN labels(n) AS labels, coalesce(n.label, n.name, "") AS name,
+               properties(n) AS props, rels, coalesce(n.uuid, "") AS uuid
+        ORDER BY size(rels) DESC, uuid
+    """
+
+    def _community_lines(self, community_id) -> List[str]:
+        rows = self.db.query(
+            self._COMMUNITY_NODES_QUERY, params={"cid": community_id}
+        )
+        return [
+            node_line(
+                row["labels"],
+                row["name"],
+                row["props"] or {},
+                [rel for rel in (row["rels"] or []) if rel],
+                self.summary_limits,
+            )
+            for row in rows
+        ]
+
+    def _summarize_batch(self, records, chars_used: int) -> tuple:
+        """LLM summaries of a batch of communities; returns them and the
+        characters of node lines read, counted against the run's budget."""
+        limits = self.summary_limits
+        prepared = []
+        for rec in records:
+            lines = self._community_lines(rec["id"])
+            lines, cut = fit_budget(
+                lines, limits.max_chars_per_run - chars_used, limits
+            )
+            if cut:
+                logger.warning(
+                    f"   Community {rec['id']}: only its {len(lines)} best-connected "
+                    f"nodes are summarized (the run's budget is used up)."
+                )
+            chars_used += sum(len(line) + 1 for line in lines)
+            prepared.append((rec["id"], lines))
+        return summarize_communities(prepared, self.summarize_fn, limits), chars_used
+
+    def index_communities(self):
+        logger.info("4️⃣  Indexing Communities...")
+
+        mark_done = (
+            "MATCH (c:Community {id: $id}) "
+            "SET c.indexed = true, c.summary = $summary, c.summarized = $summarized"
+        )
+        chars_used = 0
 
         while True:
             records = self.db.query(
-                query, params={"batch_size": self.vector_batch_size}
+                self._COMMUNITIES_QUERY,
+                params={"batch_size": self.vector_batch_size},
             )
             if not records:
                 break
 
-            texts = [r["text"] for r in records]
+            summaries = {}
+            if self.summarize_fn:
+                summaries, chars_used = self._summarize_batch(records, chars_used)
+
+            # A community always has a summary to embed: the LLM's, or its key
+            # elements when there is no LLM or its call failed.
+            summarized = {rec["id"]: bool(summaries.get(rec["id"])) for rec in records}
+            texts = [
+                summaries.get(rec["id"]) or rec["elements"] for rec in records
+            ]
             vectors = self.embed_batch(texts)
             points = []
 
@@ -435,7 +523,7 @@ class GraphIndexer:
                         id=rec["id"],
                         vector=vectors[i],
                         payload={
-                            "text": rec["text"],
+                            "summary": texts[i],
                             "community_id": rec["id"],
                             "type": "community",
                         },
@@ -447,7 +535,19 @@ class GraphIndexer:
                     collection_name=self.communities_collection, points=points
                 )
 
-            for r in records:
-                self.db.query(mark_done, params={"id": r["id"], "text": r["text"]})
+            # Every community is marked, even one with no vector: otherwise
+            # the query above would return it again, forever.
+            for i, rec in enumerate(records):
+                self.db.query(
+                    mark_done,
+                    params={
+                        "id": rec["id"],
+                        "summary": texts[i],
+                        "summarized": summarized[rec["id"]],
+                    },
+                )
 
-            logger.info(f"   Indexed {len(points)} communities.")
+            logger.info(
+                f"   Indexed {len(points)} communities "
+                f"({sum(summarized.values())} summarized by the LLM)."
+            )

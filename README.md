@@ -157,6 +157,24 @@ client.index()
 print("Indexing complete!")
 ```
 
+#### Community summaries
+
+Each community gets a `summary` (on its Neo4j `:Community` node and in its Qdrant payload), and the summary is what is embedded for topic-level search. Pass a `summarize_fn` to have an LLM write it from **all** the community's nodes:
+
+```python
+def summarize(prompt: str) -> str:
+    return my_llm(prompt)  # one prompt in, the summary out; retry inside if you need to
+
+client = GraphRetrievalClient(embed_fn=embed, summarize_fn=summarize)
+client.index()
+```
+
+- Every node of the community is given to the model as a compact line (`Drug "Keytruda" {class: PD-1}; TREATS Melanoma`): its labels, name, a few properties and its outgoing relationships. A community too large for one prompt is summarized in batches, and the batches' summaries are summarized in turn until one is left. The prompt is `SUMMARY_PROMPT` in `community_summary.py`.
+- Without `summarize_fn`, or when a call fails, the summary is the list of the community's five best-connected nodes (`Key Elements:` lines), and `c.summarized` is `false` (`true` when an LLM wrote it). A failed call never fails the indexing.
+- Cost grows with the graph: the node lines of the whole graph go through the model once per `index()`. `SummaryLimits` (in `community_summary.py`, passed as `GraphIndexer(summary_limits=...)`) bounds it: `max_chars_per_run` (default 8 million characters) is a budget over the run, after which a community is cut to its best-connected nodes (at least `min_chars_per_community` each); communities are indexed smallest first, so the largest are the ones cut.
+- Communities are detected with a fixed Leiden seed and node order, so the same graph gives the same communities.
+- The `:Community.text` property and the Qdrant `text` payload of communities are no longer written: nothing in retrieval reads them (it uses `community_id` and the score).
+
 To completely reset your vector index, use the `clear_index()` method. **Warning**: This is a destructive operation that deletes and recreates the Qdrant collections.
 
 ```python
@@ -293,11 +311,13 @@ The project is organized as a standard Python package:
 │   ├── client.py         # Main client class
 │   ├── config.py         # Configuration and logging setup
 │   ├── indexer.py        # Logic for indexing the graph
+│   ├── community_summary.py  # LLM summaries of communities (map-reduce)
 │   ├── retriever.py      # Logic for retrieving subgraphs
 │   ├── db/               # Database adapters
 │   │   ├── neo4j.py
 │   │   └── falkordb.py
 │   └── models.py         # Pydantic models (e.g., RetrievalConfig)
+├── tests/
 ├── examples/
 ├── pyproject.toml        # Project metadata and dependencies
 └── README.md             # This file

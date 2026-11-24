@@ -26,6 +26,7 @@ class GraphRetrievalClient:
         qdrant_schema_collection: Optional[str] = None,
         vector_size: Optional[int] = None,
         llm_fn: Optional[Callable[[str], str]] = None,
+        summarize_fn: Optional[Callable[[str], str]] = None,
     ):
         self.llm_fn = llm_fn
         # 1. Initialize Database Adapter
@@ -75,6 +76,7 @@ class GraphRetrievalClient:
             chunks_collection=qdrant_chunks_collection,
             communities_collection=qdrant_communities_collection,
             schema_collection=qdrant_schema_collection,
+            summarize_fn=summarize_fn,
         )
         self._cypher_generator = CypherGenerator(
             db_adapter=self.db_adapter,
