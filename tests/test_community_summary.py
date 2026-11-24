@@ -25,14 +25,23 @@ def test_prompt_is_the_agreed_one():
 
 
 class TestNodeLine:
-    def test_labels_name_properties_and_relationships(self):
+    def test_labels_name_properties_and_relationships_with_their_direction(self):
         line = node_line(
             ["Drug", "_CommunityMember"],
             "Keytruda",
             {"class": "PD-1", "uuid": "u1", "community_id": 3, "sourceJobIds": ["j"]},
-            [{"type": "TREATS", "target": "Melanoma"}, {"type": "MANIFESTS_AS", "target": "Fatigue"}],
+            [
+                {"type": "TREATS", "target": "Melanoma", "label": "Condition", "dir": "out"},
+                {"type": "MAKES", "target": "Merck", "label": "Company", "dir": "in"},
+            ],
         )
-        assert line == 'Drug "Keytruda" {class: PD-1}; TREATS Melanoma; MANIFESTS_AS Fatigue'
+        assert line == (
+            'Drug "Keytruda" {class: PD-1}; -TREATS-> Condition "Melanoma"; <-MAKES- Company "Merck"'
+        )
+
+    def test_a_relationship_without_direction_or_label_leaves_the_node(self):
+        line = node_line(["A"], "a", {}, [{"type": "R", "target": "b"}])
+        assert line == 'A "a"; -R-> b'
 
     def test_a_node_without_name_or_extras_is_just_its_labels(self):
         assert node_line(["Person"], "", {}, []) == "Person"
@@ -42,7 +51,17 @@ class TestNodeLine:
         line = node_line(["A"], "x", {"label": "x", "name": "x", "k": "", "n": None, "v": 2}, [])
         assert line == 'A "x" {v: 2}'
 
-    def test_limits_properties_relationships_and_value_length(self):
+    def test_keeps_all_the_properties_and_relationships_of_an_ordinary_node(self):
+        props = {f"property{i:02d}": f"value {i}" for i in range(30)}
+        rels = [{"type": f"REL{i}", "target": f"t{i}", "label": "L", "dir": "out"} for i in range(40)]
+
+        line = node_line(["A"], "n", props, rels)
+
+        assert all(f"property{i:02d}: value {i}" in line for i in range(30))
+        assert all(f'-REL{i}-> L "t{i}"' in line for i in range(40))
+        assert "more)" not in line
+
+    def test_safety_limits_cut_values_properties_and_relationships(self):
         limits = SummaryLimits(max_properties=2, max_relationships=1, value_chars=10)
         line = node_line(
             ["A"],
@@ -51,8 +70,13 @@ class TestNodeLine:
             [{"type": "R1", "target": "t1"}, {"type": "R2", "target": "t2"}, {"type": "R3", "target": "t3"}],
             limits,
         )
-        assert line == 'A "n" {a: 1, b: 2}; R1 t1; (+2 more)'
+        assert line == 'A "n" {a: 1, b: 2}; -R1-> t1; (+2 more)'
         assert "x" * 11 not in node_line(["A"], "n", {"long": "x" * 50}, [], limits)
+
+    def test_a_long_value_is_cut_at_300_characters_by_default(self):
+        line = node_line(["A"], "n", {"text": "y" * 1000}, [])
+
+        assert "y" * 300 not in line and "y" * 290 in line
 
     def test_a_repeated_relationship_is_written_once_with_its_count(self):
         line = node_line(
@@ -61,7 +85,7 @@ class TestNodeLine:
             {},
             [{"type": "CITES", "target": "X"}] * 3 + [{"type": "CITES", "target": "Y"}],
         )
-        assert line == 'Doc "d"; CITES X (x3); CITES Y'
+        assert line == 'Doc "d"; -CITES-> X (x3); -CITES-> Y'
 
     def test_flattens_whitespace_in_values(self):
         assert node_line(["A"], "two\nlines", {}, []) == 'A "two lines"'

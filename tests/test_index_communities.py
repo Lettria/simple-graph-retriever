@@ -18,7 +18,7 @@ class FakeDB:
         if "c.indexed IS NULL" in query:
             ids = sorted(self.pending)[: params["batch_size"]]
             return [{"id": i, "elements": self.pending[i]} for i in ids]
-        if "OPTIONAL MATCH (n)-[r]->(m)" in query:
+        if "(n)<-[r]-(m)" in query:
             return self.nodes[params["cid"]]
         if "SET c.indexed = true" in query:
             self.pending.pop(params["id"], None)
@@ -36,11 +36,12 @@ class FakeQdrant:
 
 
 def row(name, label="Drug", rels=(), props=None):
+    """A row of the node query; rels are (type, target label, target name, dir)."""
     return {
         "labels": [label, "_CommunityMember"],
         "name": name,
         "props": props or {},
-        "rels": [{"type": t, "target": x} for t, x in rels],
+        "rels": [{"type": t, "label": lab, "target": x, "dir": d} for t, lab, x, d in rels],
         "uuid": name,
     }
 
@@ -65,7 +66,10 @@ def build(communities, nodes, summarize_fn=None, embed=None, limits=SummaryLimit
 
 COMMUNITIES = {1: "Key Elements:\nDrug:Keytruda\n", 2: "Key Elements:\nDrug:Opdivo\n"}
 NODES = {
-    1: [row("Keytruda", rels=[("TREATS", "Melanoma")]), row("Melanoma", "Condition")],
+    1: [
+        row("Keytruda", rels=[("TREATS", "Condition", "Melanoma", "out")], props={"class": "PD-1"}),
+        row("Melanoma", "Condition", rels=[("TREATS", "Drug", "Keytruda", "in")]),
+    ],
     2: [row("Opdivo")],
 }
 
@@ -87,8 +91,9 @@ def test_the_summary_is_what_is_embedded_and_stored():
     ]
     assert indexer.db.marked[1] == {"id": 1, "summary": "Summary of community.", "summarized": True}
     # All the community's nodes were given to the model, with their relationships.
-    assert 'Drug "Keytruda"; TREATS Melanoma' in prompts[0]
-    assert 'Condition "Melanoma"' in prompts[0]
+    assert 'Drug "Keytruda" {class: PD-1}; -TREATS-> Condition "Melanoma"' in prompts[0]
+    # ... with their properties, and each relationship on both ends, with its direction.
+    assert 'Condition "Melanoma"; <-TREATS- Drug "Keytruda"' in prompts[0]
 
 
 def test_text_is_no_longer_written():
@@ -169,3 +174,10 @@ def test_communities_are_taken_smallest_first():
 
 def test_the_leiden_seed_is_fixed():
     assert isinstance(COMMUNITY_SEED, int)
+
+
+def test_the_node_query_reads_both_directions_and_the_other_entitys_label():
+    query = GraphIndexer._COMMUNITY_NODES_QUERY
+
+    assert "(n)-[r]->(m)" in query and "(n)<-[r]-(m)" in query
+    assert "head([l IN labels(m)" in query

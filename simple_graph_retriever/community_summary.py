@@ -30,8 +30,10 @@ STRICT RULES:
 GOAL: Produce a 3-to-5-sentence summary exclusively within provided data."""
 
 NODES_HEADER = (
-    "ENTITIES AND RELATIONSHIPS (one entity per line: labels, name, "
-    "properties in braces, then its outgoing relationships as TYPE target):"
+    "ENTITIES AND RELATIONSHIPS (one entity per line: its labels, its name, "
+    "all its properties in braces, then all its relationships: -TYPE-> for an "
+    "outgoing one and <-TYPE- for an incoming one, followed by the other "
+    "entity's label and name):"
 )
 
 # Said when the text to summarize is itself a list of summaries (the reduce
@@ -62,20 +64,22 @@ class SummaryLimits:
     """How much text goes to the model, and how much of it."""
 
     #: Characters of one prompt's data (a batch of lines, or of summaries).
-    batch_chars: int = 12_000
+    batch_chars: int = 40_000
     #: Characters of a finished summary; longer ones are cut at a sentence.
     max_summary_chars: int = 1_500
     #: Characters of node lines read over a whole indexing run. A community
     #: that would exceed it is cut to its best-connected nodes (below), so one
     #: huge graph cannot make the run's cost unbounded.
-    max_chars_per_run: int = 8_000_000
+    max_chars_per_run: int = 12_000_000
     #: A community always gets at least this much, whatever the run has used.
-    min_chars_per_community: int = 4_000
-    #: What is kept of a node's line.
-    max_properties: int = 5
-    max_relationships: int = 8
-    value_chars: int = 60
-    line_chars: int = 500
+    min_chars_per_community: int = 20_000
+    #: What is kept of a node's line: everything, within safety limits that
+    #: only an abnormal node reaches (a value is cut, a node with hundreds of
+    #: relationships gets "(+N more)").
+    max_properties: int = 100
+    max_relationships: int = 100
+    value_chars: int = 300
+    line_chars: int = 6_000
     #: Communities summarized at the same time.
     concurrency: int = 4
 
@@ -105,9 +109,13 @@ def node_line(
     relationships: Sequence[Dict[str, Any]],
     limits: SummaryLimits = DEFAULT_LIMITS,
 ) -> str:
-    """One node as a compact line, for example::
+    """One node, with all its data, as a line, for example::
 
-        Drug "Keytruda" {class: PD-1}; TREATS Melanoma; MANIFESTS_AS Fatigue
+        Drug "Keytruda" {class: PD-1}; -TREATS-> Condition "Melanoma"; <-MAKES- Company "Merck"
+
+    A relationship is `-TYPE-> label "name"` when it leaves the node and
+    `<-TYPE- label "name"` when it arrives (its `dir` is `out` or `in`; `out`
+    when absent), where label and name are the other entity's.
     """
     domain_labels = [l for l in labels if not l.startswith("_")]
     head = "/".join(domain_labels) or "Item"
@@ -125,12 +133,21 @@ def node_line(
     if properties:
         head += " {" + ", ".join(properties) + "}"
 
-    # The same relationship to nodes of the same name is written once, counted.
+    # The same relationship to entities of the same label and name is written
+    # once, counted.
     counted: Dict[str, int] = {}
     for rel in relationships:
-        if rel and rel.get("type"):
-            text = f"{rel['type']} {_short(rel.get('target') or 'Item', limits.value_chars)}"
-            counted[text] = counted.get(text, 0) + 1
+        if not rel or not rel.get("type"):
+            continue
+        other = _short(rel.get("target") or "Item", limits.value_chars)
+        if rel.get("label"):
+            other = f'{rel["label"]} "{other}"'
+        text = (
+            f"<-{rel['type']}- {other}"
+            if rel.get("dir") == "in"
+            else f"-{rel['type']}-> {other}"
+        )
+        counted[text] = counted.get(text, 0) + 1
     shown = [
         text if count == 1 else f"{text} (x{count})"
         for text, count in list(counted.items())[: limits.max_relationships]

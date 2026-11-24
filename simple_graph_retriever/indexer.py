@@ -438,15 +438,27 @@ class GraphIndexer:
         RETURN c.id as id, elements
     """
 
-    # Every node of a community with its outgoing relationships (each
-    # relationship once), best-connected first, in a fixed order.
+    # Every node of a community with all its data: its properties and all its
+    # relationships, outgoing and incoming (each written on both of its ends,
+    # with its direction), best-connected first, in a fixed order.
     _COMMUNITY_NODES_QUERY = """
         MATCH (n) WHERE n.community_id = $cid AND NOT n:GraphChunk AND NOT n:Community
-        OPTIONAL MATCH (n)-[r]->(m) WHERE NOT m:GraphChunk AND NOT m:Community
-        WITH n, collect(CASE WHEN r IS NULL THEN NULL ELSE
-                 {type: type(r), target: coalesce(m.label, m.name, "Item")} END) AS rels
+        CALL {
+            WITH n
+            MATCH (n)-[r]->(m) WHERE NOT m:GraphChunk AND NOT m:Community
+            WITH r, m ORDER BY type(r), coalesce(m.label, m.name, ""), coalesce(m.uuid, "")
+            RETURN collect({type: type(r), dir: "out", target: coalesce(m.label, m.name, "Item"),
+                            label: head([l IN labels(m) WHERE NOT l STARTS WITH '_']) }) AS outs
+        }
+        CALL {
+            WITH n
+            MATCH (n)<-[r]-(m) WHERE NOT m:GraphChunk AND NOT m:Community
+            WITH r, m ORDER BY type(r), coalesce(m.label, m.name, ""), coalesce(m.uuid, "")
+            RETURN collect({type: type(r), dir: "in", target: coalesce(m.label, m.name, "Item"),
+                            label: head([l IN labels(m) WHERE NOT l STARTS WITH '_']) }) AS ins
+        }
         RETURN labels(n) AS labels, coalesce(n.label, n.name, "") AS name,
-               properties(n) AS props, rels, coalesce(n.uuid, "") AS uuid
+               properties(n) AS props, outs + ins AS rels, coalesce(n.uuid, "") AS uuid
         ORDER BY size(rels) DESC, uuid
     """
 
