@@ -24,6 +24,17 @@ def test_prompt_is_the_agreed_one():
     assert SUMMARY_PROMPT.endswith("GOAL: Produce a 3-to-5-sentence summary exclusively within provided data.")
 
 
+def test_prompt_adds_rules_for_identifiers_style_and_length_after_the_original_three():
+    rules = SUMMARY_PROMPT.split("STRICT RULES:\n", 1)[1].split("\n\nGOAL", 1)[0].split("\n")
+
+    assert len(rules) == 7
+    assert [r.split(".", 1)[0] for r in rules] == ["1", "2", "3", "4", "5", "6", "7"]
+    assert "BN:" in rules[3] and "label" in rules[3]
+    assert "plain words" in rules[4].lower()
+    assert "this community" in rules[5] and "central" in rules[5]
+    assert "100 words" in rules[6]
+
+
 class TestNodeLine:
     def test_labels_name_properties_and_relationships_with_their_direction(self):
         line = node_line(

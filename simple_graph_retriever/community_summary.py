@@ -26,6 +26,10 @@ STRICT RULES:
 1. Zero External Knowledge: You are forbidden from using any names or facts that do not appear in the text below.
 2. Adjectives: Do not add descriptive words like 'major' or 'important'.
 3. Verbatim: Use only the definitions of labels and relationship types provided.
+4. Identifiers: Never write identifiers such as "BN:Employment_1" or any name that starts with "BN:". Refer to such an entity by its label (for example "an Employment record") and its properties.
+5. Plain words: Write relationship types as plain words (for example "has employment" for hasEmployment).
+6. Direct start: Start with the subject itself. Do not write "this community" or "the community", and do not use the word "central".
+7. Length: Use at most 100 words.
 
 GOAL: Produce a 3-to-5-sentence summary exclusively within provided data."""
 
