@@ -30,6 +30,7 @@ STRICT RULES:
 5. Plain words: Write relationship types as plain words (for example "has employment" for hasEmployment).
 6. Direct start: Start with the subject itself. Do not write "this community" or "the community", and do not use the word "central".
 7. Length: Use at most 100 words.
+8. Output only the final summary text: no drafts, corrections, notes or commentary, and no text before or after it.
 
 GOAL: Produce a 3-to-5-sentence summary exclusively within provided data."""
 
